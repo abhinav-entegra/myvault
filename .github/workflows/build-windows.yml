@@ -8,9 +8,8 @@ on:
       - "v*"
   workflow_dispatch:
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+# Omit aggressive concurrency — cancel-in-progress on same branch drops runs mid-step with
+# “The operation was canceled” while npm ci may have already succeeded.
 
 permissions:
   contents: write
