@@ -34,6 +34,17 @@ jobs:
           node-version: "22"
           cache: npm
 
+      # node-gyp’s bundled GYP imports distutils (removed from Python 3.12+). Pin 3.11 for CI.
+      - name: Python 3.11 for node-gyp / electron-rebuild
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Check Python (node-gyp)
+        run: |
+          python --version
+          python -c "import distutils.version; print('distutils OK')"
+
       - name: Install dependencies
         run: |
           Write-Host "=== npm ci START $(Get-Date -Format o) ==="
