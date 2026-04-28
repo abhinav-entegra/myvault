@@ -22,15 +22,17 @@ jobs:
 
     env:
       CI: true
+      # Silence legacy Node 20 on Action runner deprecation until GitHub migrates infra
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Use Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
 
       - name: Install dependencies
@@ -42,7 +44,10 @@ jobs:
       - name: Rebuild native addons (electron)
         run: npm run rebuild:native
 
-      - name: Build renderer + NSIS installer
+      - name: Build Vite renderer (required for renderer-dist)
+        run: npm run build
+
+      - name: NSIS installer (electron-builder)
         run: npx electron-builder --win nsis --publish never
 
       - name: Upload installer artifact (Actions tab)
