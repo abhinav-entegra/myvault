@@ -1,0 +1,16 @@
+node_modules/
+
+dist/
+
+renderer-dist/
+
+*.log
+
+.DS_Store
+
+Thumbs.db
+
+vault.db
+
+# Local Supabase credentials (copy from supabase.config.sample.json)
+app/supabase.config.json

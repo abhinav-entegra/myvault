@@ -1,0 +1,8 @@
+{
+  "_readme": "Copy to app/supabase.config.json, fill in, then run: npm run embed:supabase — commit app/embed/supabase.embedded.cipher.json (not this file).",
+  "supabaseUrl": "https://YOUR_PROJECT.supabase.co",
+  "anonKey": "YOUR_SUPABASE_ANON_KEY",
+  "serviceRoleKey": "YOUR_SERVICE_ROLE_KEY_OPTIONAL_USE_RLS_APPROPRIATELY",
+  "table": "vault_users",
+  "orgEmailSuffix": "@yourcompany.com"
+}

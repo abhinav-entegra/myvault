@@ -1,0 +1,53 @@
+name: Build and release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+
+        uses: actions/setup-node@v4
+
+        with:
+          node-version: 20
+
+          cache: npm
+
+      - name: Install
+
+        run: npm ci
+
+      - name: Build renderer
+
+        run: npm run build:renderer
+
+      - name: Package
+
+        run: npx electron-builder --publish never
+
+      - name: Upload artifacts
+
+        uses: actions/upload-artifact@v4
+
+        with:
+          name: dist-${{ matrix.os }}
+
+          path: dist/**

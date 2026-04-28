@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+
+<html lang="en">
+
+  <head>
+    <meta charset="UTF-8" />
+
+    <title>Vault Manager Bridge</title>
+
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none';"
+    />
+
+    <link rel="stylesheet" href="options.css" />
+
+  </head>
+
+  <body>
+    <main class="panel">
+      <h1>Vault Manager Bridge</h1>
+
+      <p class="lead">
+        Set the loopback URL and bearer token copied from Vault Manager ▸ Extension.
+      </p>
+
+      <label for="baseUrl">API base URL</label>
+
+      <input id="baseUrl" autocomplete="off" />
+
+      <label for="token">Bearer token</label>
+
+      <input id="token" type="password" autocomplete="new-password" />
+
+      <div class="row">
+
+        <button id="save" type="button">Save</button>
+
+        <button id="test" type="button" class="secondary">Test connection</button>
+
+      </div>
+
+      <p id="status" class="status" aria-live="polite"></p>
+
+      <p class="hint">
+
+        Autofill fires from the toolbar icon or Alt+Shortcut (adjust in chrome://extensions/shortcuts).
+
+      </p>
+
+    </main>
+
+    <script src="options.js" defer></script>
+
+  </body>
+
+</html>

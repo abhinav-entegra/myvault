@@ -1,0 +1,79 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+}
+
+@layer utilities {
+  .glass-panel {
+    @apply border border-white/40 bg-white/70 shadow-glass backdrop-blur-vault;
+    box-shadow:
+      0 8px 32px rgba(0, 0, 0, 0.08),
+      inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  }
+
+  .glass-modal {
+    @apply border border-black/10 bg-white/[0.82] backdrop-blur-vault;
+    box-shadow:
+      0 24px 80px rgba(0, 0, 0, 0.12),
+      0 8px 24px rgba(0, 0, 0, 0.08),
+      inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  }
+
+  .glass-rail {
+    @apply border border-black/[0.06] bg-white/[0.55] backdrop-blur-vault;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06);
+  }
+
+  .text-quiet {
+    @apply text-vault-muted;
+  }
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: rgba(110, 110, 115, 0.85);
+}
+
+/* Smooth scrolling for category rail */
+.overflow-y-overlay {
+  scrollbar-gutter: stable;
+}
+
+@keyframes vault-header-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes vault-panel-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@layer utilities {
+  .animate-vault-header {
+    animation: vault-header-in 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .animate-vault-grid {
+    animation: vault-panel-fade 0.4s ease-out both;
+  }
+}
