@@ -13,7 +13,7 @@
     "dev": "concurrently -k \"npm run dev:vite\" \"wait-on http://127.0.0.1:5173 && cross-env NODE_ENV=development electron .\"",
     "build:renderer": "vite build --config renderer/vite.config.js",
     "generate-icon": "node scripts/generate-app-icon.cjs",
-    "sync-brand-icon": "node -e \"require('fs').copyFileSync('renderer/public/logo-mark.png','app/icon.png')\"",
+    "sync-brand-icon": "node scripts/generate-app-icon.cjs",
     "build": "npm run build:renderer",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
