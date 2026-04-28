@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 # Omit aggressive concurrency — cancel-in-progress on same branch drops runs mid-step with
-# “The operation was canceled” while npm ci may have already succeeded.
+# "The operation was canceled" while npm ci may have already succeeded.
 
 permissions:
   contents: write
@@ -34,7 +34,7 @@ jobs:
           node-version: "22"
           cache: npm
 
-      # node-gyp’s bundled GYP imports distutils (removed from Python 3.12+). Pin 3.11 for CI.
+      # node-gyp's bundled GYP imports distutils (removed from Python 3.12+). Pin 3.11 for CI.
       - name: Python 3.11 for node-gyp / electron-rebuild
         uses: actions/setup-python@v6
         with:
@@ -44,6 +44,11 @@ jobs:
         run: |
           python --version
           python -c "import distutils.version; print('distutils OK')"
+
+      - name: Install build tools for node-gyp
+        run: |
+          pip install --upgrade setuptools
+          npm install -g node-gyp@latest
 
       - name: Install dependencies
         run: |
