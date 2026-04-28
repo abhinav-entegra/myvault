@@ -17,7 +17,7 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     env:
       CI: true
@@ -35,19 +35,33 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          Write-Host "=== npm ci START $(Get-Date -Format o) ==="
+          npm ci
+          Write-Host "=== npm ci END $(Get-Date -Format o) ==="
 
       - name: Verify embedded Supabase ciphertext (committed)
         run: if (!(Test-Path "app/embed/supabase.embedded.cipher.json")) { throw "Missing app/embed/supabase.embedded.cipher.json — run npm run embed:supabase locally and commit." }
 
-      - name: Rebuild native addons (electron)
-        run: npm run rebuild:native
+      - name: Rebuild native addons (electron — often 12–35 min on Windows; log may stall while cl.exe/link run)
+        env:
+          npm_config_loglevel: verbose
+        run: |
+          Write-Host "=== electron-rebuild START $(Get-Date -Format o) ==="
+          npm run rebuild:native
+          Write-Host "=== electron-rebuild END $(Get-Date -Format o) ==="
 
       - name: Build Vite renderer (required for renderer-dist)
-        run: npm run build
+        run: |
+          Write-Host "=== vite build START $(Get-Date -Format o) ==="
+          npm run build
+          Write-Host "=== vite build END $(Get-Date -Format o) ==="
 
       - name: NSIS installer (electron-builder)
-        run: npx electron-builder --win nsis --publish never
+        run: |
+          Write-Host "=== electron-builder START $(Get-Date -Format o) ==="
+          npx electron-builder --win nsis --publish never
+          Write-Host "=== electron-builder END $(Get-Date -Format o) ==="
 
       - name: Upload installer artifact (Actions tab)
         uses: actions/upload-artifact@v4
