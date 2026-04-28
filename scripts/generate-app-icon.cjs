@@ -9,7 +9,8 @@ const fs = require("fs");
 const path = require("path");
 const { PNG } = require("pngjs");
 
-const W = 256;
+/** Windows / electron-builder: PNG icons must be ≥256×256; 512 avoids edge‑case tooling quirks. */
+const W = 512;
 const png = new PNG({ width: W, height: W, filterType: 4 });
 
 const CORNER_R = 0.23;

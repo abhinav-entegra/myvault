@@ -1,0 +1,4 @@
+# Prevent Git line-ending normalization from corrupting binary assets (would break PNG/ICO sizing checks).
+*.png binary
+*.ico binary
+*.asar binary
