@@ -83,12 +83,18 @@ jobs:
           npx electron-builder --win nsis --publish never
           Write-Host "=== electron-builder END $(Get-Date -Format o) ==="
 
+      - name: Verify auto-update metadata (electron-updater needs latest.yml on the release)
+        run: |
+          if (!(Test-Path "dist/latest.yml")) { throw "Missing dist/latest.yml — electron-builder should emit this for GitHub Releases auto-update." }
+          Get-ChildItem dist -Name
+
       - name: Upload installer artifact (Actions tab)
         uses: actions/upload-artifact@v4
         with:
           name: myvault-windows-setup-${{ github.sha }}
           path: |
             dist/*.exe
+            dist/latest.yml
           if-no-files-found: error
 
       - name: GitHub Release (tags v* only)
@@ -103,3 +109,4 @@ jobs:
           generate_release_notes: true
           files: |
             dist/*.exe
+            dist/latest.yml
