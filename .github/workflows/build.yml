@@ -31,6 +31,19 @@ jobs:
 
           cache: npm
 
+      # node-gyp expects distutils (removed in Python 3.12+). Align with build-windows.yml.
+      - name: Python 3.11 for node-gyp / electron-rebuild
+
+        uses: actions/setup-python@v6
+
+        with:
+
+          python-version: "3.11"
+
+      - name: Install setuptools (node-gyp)
+
+        run: pip install --upgrade setuptools
+
       - name: Install
 
         run: npm ci
