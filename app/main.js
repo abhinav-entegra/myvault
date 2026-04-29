@@ -4,7 +4,15 @@ const fs = require("fs");
 
 const path = require("path");
 
-const { app, BrowserWindow, ipcMain, clipboard, Menu } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  ipcMain,
+  clipboard,
+  Menu,
+  dialog,
+  Notification,
+} = require("electron");
 
 const { openDatabase } = require("./db");
 const session = require("./session");
@@ -725,6 +733,31 @@ function updaterLogLine(...parts) {
   }
 }
 
+/** Best window for parented dialogs (update prompts). */
+function getPrimaryBrowserWindow() {
+  return (
+    BrowserWindow.getFocusedWindow() ||
+    BrowserWindow.getAllWindows().find(Boolean) ||
+    null
+  );
+}
+
+/** Optional toast so updates are visibly announced (Windows prefers setAppUserModelId). */
+function showUpdaterToast(title, body) {
+  try {
+    if (!Notification.isSupported()) {
+      return;
+    }
+    const n = new Notification({
+      title: title || "Myvault",
+      body,
+    });
+    n.show();
+  } catch {
+    //
+  }
+}
+
 function maybeAutoUpdater() {
   try {
     //
@@ -732,17 +765,65 @@ function maybeAutoUpdater() {
     if (app.isPackaged) {
       const { autoUpdater } = require("electron-updater");
 
+      const declinedPromptForVersion = new Set();
+
       /** GitHub resolves /releases/latest to the release marked “Latest”, not necessarily highest semver. If the wrong release is Latest, updater fetches stale latest.yml — fix in repo Settings → Releases → set vCURRENT as Latest. */
 
       autoUpdater.allowPrerelease = false;
+
+      autoUpdater.autoDownload = false;
+
+      autoUpdater.autoInstallOnAppQuit = true;
 
       updaterLogLine(`start check app=${String(app.getVersion())}`);
 
       autoUpdater.on("checking-for-update", () => updaterLogLine("checking-for-update"));
 
-      autoUpdater.on("update-available", (info) =>
-        updaterLogLine("update-available", info?.version, info?.releaseName ?? "")
-      );
+      autoUpdater.on("update-available", async (info) => {
+        const v = typeof info?.version === "string" ? info.version : "?";
+
+        updaterLogLine("update-available", v, info?.releaseName ?? "");
+
+        if (declinedPromptForVersion.has(v)) {
+          updaterLogLine("skipped prompt — already declined", v);
+
+          return;
+        }
+
+        const win = getPrimaryBrowserWindow();
+
+        try {
+          showUpdaterToast(`Update available (${v})`, "Choose Download or Decline.");
+
+          const res = await dialog.showMessageBox(win ?? undefined, {
+            type: "info",
+            title: "Myvault update available",
+            message: `A newer version (${v}) is ready.`,
+            detail:
+              "Download the installer now? You can decline and stay on your current version.",
+            buttons: ["Download update", "Decline"],
+            defaultId: 0,
+            cancelId: 1,
+            noLink: true,
+          });
+
+          updaterLogLine("user-choice update-available buttons", String(res.response));
+
+          if (res.response !== 0) {
+            updaterLogLine("download declined");
+
+            declinedPromptForVersion.add(v);
+
+            showUpdaterToast("Update postponed", `Version ${v} was not downloaded.`);
+
+            return;
+          }
+
+          await autoUpdater.downloadUpdate();
+        } catch (e) {
+          updaterLogLine("update-available flow error", String(e?.message ?? e ?? "?"));
+        }
+      });
 
       autoUpdater.on("update-not-available", (info) =>
         updaterLogLine(
@@ -758,16 +839,74 @@ function maybeAutoUpdater() {
 
       );
 
-      autoUpdater.on("update-downloaded", (info) =>
-        updaterLogLine("update-downloaded", info?.version)
+      autoUpdater.on("update-downloaded", async (info) => {
+        const v = typeof info?.version === "string" ? info.version : "?";
 
-      );
+        updaterLogLine("update-downloaded", v);
+
+        const win = getPrimaryBrowserWindow();
+
+        try {
+          showUpdaterToast("Ready to install", `Restart Myvault to update to ${v}.`);
+
+          const res = await dialog.showMessageBox(win ?? undefined, {
+            type: "question",
+            title: "Restart to update",
+            message: `Version ${v} has been downloaded.`,
+            detail:
+              "Restart now to finish installing this update, or postpone and install later (update applies on next quit if you enabled background install).",
+            buttons: ["Restart now", "Later"],
+            defaultId: 0,
+            cancelId: 1,
+            noLink: true,
+          });
+
+          updaterLogLine("user-choice restart buttons", String(res.response));
+
+          if (res.response === 0) {
+            setImmediate(() => {
+              autoUpdater.quitAndInstall(false, true);
+            });
+          }
+
+        } catch (e) {
+          updaterLogLine("update-downloaded flow error", String(e?.message ?? e ?? "?"));
+        }
+
+      });
 
       autoUpdater.on("error", (err) =>
         updaterLogLine(`error ${String(err?.message ?? err ?? "")}`)
       );
 
-      autoUpdater.checkForUpdatesAndNotify();
+      void autoUpdater.checkForUpdates().catch((e) => {
+        updaterLogLine(`checkForUpdates fatal ${String(e?.message ?? e ?? "?")}`);
+      });
+
+      const recheckMs = 4 * 60 * 60 * 1000;
+
+      const intervalId = setInterval(() => {
+
+        //
+
+        try {
+
+          autoUpdater.checkForUpdates().catch((e) => {
+
+            updaterLogLine(`interval check error ${String(e?.message ?? e ?? "?")}`);
+
+          });
+
+        } catch (e) {
+
+          updaterLogLine(`interval check outer ${String(e?.message ?? e ?? "?")}`);
+
+        }
+
+
+      }, recheckMs);
+
+      app.once("quit", () => clearInterval(intervalId));
     }
 
   } catch (e) {
@@ -778,6 +917,24 @@ function maybeAutoUpdater() {
 
 app.whenReady().then(async () => {
 
+
+  //
+
+  try {
+
+    if (process.platform === "win32") {
+
+      app.setAppUserModelId("com.passapp.vault");
+
+    }
+
+
+  } catch {
+
+
+    //
+
+  }
 
   //
 
