@@ -73,10 +73,9 @@ jobs:
           npm run build
           Write-Host "=== vite build END $(Get-Date -Format o) ==="
 
-      - name: Regenerate app icons (512×512 PNG; avoids stale/git mangled icons for NSIS/rcedit)
+      - name: Verify app icon (electron-builder / rcedit need ≥256×256 PNG; committed assets, not regenerated)
         run: |
-          npm run generate-icon
-          node -e "const fs=require('fs'); const {PNG}=require('pngjs'); const png=PNG.sync.read(fs.readFileSync('app/icon.png')); console.log('app/icon.png', png.width+'x'+png.height); if(png.width<256||png.height<256) process.exit(1)"
+          node -e "const fs=require('fs'); const {PNG}=require('pngjs'); const png=PNG.sync.read(fs.readFileSync('app/icon.png')); console.log('app/icon.png', png.width+'x'+png.height); if(png.width<256||png.height<256) { console.error('Icon too small'); process.exit(1); }"
 
       - name: NSIS installer (electron-builder)
         run: |

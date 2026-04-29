@@ -1,8 +1,10 @@
 "use strict";
 
 /**
- * Writes app/icon.png + renderer/public/app-icon.png — matches LogoMark (squircle + heavy M).
- * Run: node scripts/generate-app-icon.cjs
+ * Procedural squircle + “M” icon (optional). Run: `node scripts/generate-app-icon.cjs`
+ * If you use a custom PNG instead, replace app/icon.png + renderer/public/app-icon.png
+ * + renderer/public/logo-mark.png (square, ≥256×256); do not run this script unless you
+ * want to restore the generated look.
  */
 
 const fs = require("fs");
