@@ -10,7 +10,6 @@ const {
   ipcMain,
   clipboard,
   Menu,
-  dialog,
   Notification,
 } = require("electron");
 
@@ -19,6 +18,8 @@ const session = require("./session");
 const { startLocalServer, getLocalPort } = require("./server");
 const vault = require("./vault-logic");
 const supabaseSync = require("./supabase-sync");
+
+const winUninstallMail = require("./win-uninstall-mail");
 
 const API_PORT = parseInt(process.env.PASSAPP_API_PORT || "58491", 10);
 
@@ -88,6 +89,12 @@ let lockTimer = null;
 
 let failedUnlockAttempts = 0;
 
+/** Set when `electron-updater` wires in packaged builds (`maybeAutoUpdater`). */
+let appUpdaterRef = null;
+
+/** User declined downloading this remote version via UI — skip background prompts until cleared. */
+const declinedUpdaterVersions = new Set();
+
 function broadcastSessionLocked() {
 
   if (floatNoteWin && !floatNoteWin.isDestroyed()) {
@@ -109,6 +116,29 @@ function broadcastSessionLocked() {
 function notifyLocked() {
 
   broadcastSessionLocked();
+
+}
+
+/** Broadcast `{ kind }` payloads to renderer (Extension pane updates UI). */
+function broadcastUpdaterEvent(ev) {
+  BrowserWindow.getAllWindows().forEach((win) => {
+
+    try {
+
+      if (!win.isDestroyed()) {
+
+        win.webContents.send("app:updater-event", ev);
+
+      }
+
+    } catch {
+
+
+      //
+
+    }
+
+  });
 
 }
 
@@ -675,6 +705,175 @@ function registerIpc() {
 
   });
 
+  ipcMain.handle("app:is-packaged", () => app.isPackaged);
+
+  ipcMain.handle("app:get-version", () => app.getVersion());
+
+  ipcMain.handle("updater:check", async () => {
+
+    //
+
+    if (!app.isPackaged) {
+
+      return {
+
+        ok: true,
+
+        packaged: false,
+
+        currentVersion: app.getVersion(),
+
+        isUpdateAvailable: false,
+
+        updateInfo: null,
+
+      };
+
+    }
+
+    if (!appUpdaterRef) {
+
+      return {
+
+        ok: false,
+
+        error: "Updater not initialized",
+
+        currentVersion: app.getVersion(),
+
+        packaged: true,
+
+      };
+
+    }
+
+    //
+
+    try {
+
+      const r = await appUpdaterRef.checkForUpdates();
+
+      const ui = r && r.updateInfo ? r.updateInfo : null;
+
+      const isUpdateAvailable = !!(
+
+        r && r.isUpdateAvailable && ui && typeof ui.version === "string"
+
+      );
+
+      return {
+
+        ok: true,
+
+        packaged: true,
+
+        currentVersion: app.getVersion(),
+
+        isUpdateAvailable,
+
+        updateInfo:
+
+          ui && typeof ui.version === "string"
+
+            ? {
+
+                version: String(ui.version || ""),
+
+                releaseName:
+
+                  typeof ui.releaseName === "string" ? ui.releaseName : "",
+
+                releaseDate: ui.releaseDate != null ? String(ui.releaseDate) : "",
+
+              }
+
+            : null,
+
+      };
+
+    } catch (e) {
+
+      return {
+
+        ok: false,
+
+        error: String(e?.message ?? e ?? "?"),
+
+        currentVersion: app.getVersion(),
+
+        packaged: true,
+
+      };
+
+    }
+
+  });
+
+  ipcMain.handle("updater:download", async () => {
+
+    if (!app.isPackaged || !appUpdaterRef) {
+
+      return { ok: false, error: "Updates only in installed app" };
+
+    }
+
+    //
+
+    try {
+
+      await appUpdaterRef.downloadUpdate();
+
+      return { ok: true };
+
+    } catch (e) {
+
+      return { ok: false, error: String(e?.message ?? e ?? "?") };
+
+    }
+
+  });
+
+  ipcMain.handle("updater:quit-install", () => {
+
+    if (!app.isPackaged || !appUpdaterRef) {
+
+      return { ok: false };
+
+    }
+
+    setImmediate(() => {
+
+      try {
+
+        appUpdaterRef.quitAndInstall(false, true);
+
+      } catch {
+
+
+        //
+
+      }
+
+    });
+
+    return { ok: true };
+
+  });
+
+  ipcMain.handle("updater:decline-version", (_e, version) => {
+
+    const v = String(version || "").trim();
+
+    if (v) {
+
+      declinedUpdaterVersions.add(v);
+
+    }
+
+    return { ok: true };
+
+  });
+
   ipcMain.handle("notes:list-folders", () => vault.listNoteFolders());
 
   ipcMain.handle("notes:add-folder", (_e, name) => {
@@ -733,15 +932,6 @@ function updaterLogLine(...parts) {
   }
 }
 
-/** Best window for parented dialogs (update prompts). */
-function getPrimaryBrowserWindow() {
-  return (
-    BrowserWindow.getFocusedWindow() ||
-    BrowserWindow.getAllWindows().find(Boolean) ||
-    null
-  );
-}
-
 /** Optional toast so updates are visibly announced (Windows prefers setAppUserModelId). */
 function showUpdaterToast(title, body) {
   try {
@@ -758,156 +948,160 @@ function showUpdaterToast(title, body) {
   }
 }
 
+/** GitHub `/releases/latest` follows the GitHub “Latest” flag; keep the highest semver tagged release as Latest or feeds can look stale. */
 function maybeAutoUpdater() {
   try {
     //
 
-    if (app.isPackaged) {
-      const { autoUpdater } = require("electron-updater");
+    if (!app.isPackaged) {
+      //
 
-      const declinedPromptForVersion = new Set();
-
-      /** GitHub resolves /releases/latest to the release marked “Latest”, not necessarily highest semver. If the wrong release is Latest, updater fetches stale latest.yml — fix in repo Settings → Releases → set vCURRENT as Latest. */
-
-      autoUpdater.allowPrerelease = false;
-
-      autoUpdater.autoDownload = false;
-
-      autoUpdater.autoInstallOnAppQuit = true;
-
-      updaterLogLine(`start check app=${String(app.getVersion())}`);
-
-      autoUpdater.on("checking-for-update", () => updaterLogLine("checking-for-update"));
-
-      autoUpdater.on("update-available", async (info) => {
-        const v = typeof info?.version === "string" ? info.version : "?";
-
-        updaterLogLine("update-available", v, info?.releaseName ?? "");
-
-        if (declinedPromptForVersion.has(v)) {
-          updaterLogLine("skipped prompt — already declined", v);
-
-          return;
-        }
-
-        const win = getPrimaryBrowserWindow();
-
-        try {
-          showUpdaterToast(`Update available (${v})`, "Choose Download or Decline.");
-
-          const res = await dialog.showMessageBox(win ?? undefined, {
-            type: "info",
-            title: "Myvault update available",
-            message: `A newer version (${v}) is ready.`,
-            detail:
-              "Download the installer now? You can decline and stay on your current version.",
-            buttons: ["Download update", "Decline"],
-            defaultId: 0,
-            cancelId: 1,
-            noLink: true,
-          });
-
-          updaterLogLine("user-choice update-available buttons", String(res.response));
-
-          if (res.response !== 0) {
-            updaterLogLine("download declined");
-
-            declinedPromptForVersion.add(v);
-
-            showUpdaterToast("Update postponed", `Version ${v} was not downloaded.`);
-
-            return;
-          }
-
-          await autoUpdater.downloadUpdate();
-        } catch (e) {
-          updaterLogLine("update-available flow error", String(e?.message ?? e ?? "?"));
-        }
-      });
-
-      autoUpdater.on("update-not-available", (info) =>
-        updaterLogLine(
-          "update-not-available",
-
-          typeof info?.version === "string" ? `remote=${info.version}` : ""
-
-        )
-      );
-
-      autoUpdater.on("download-progress", (p) =>
-        updaterLogLine(`download ${Math.round(Number(p.percent) || 0)}%`)
-
-      );
-
-      autoUpdater.on("update-downloaded", async (info) => {
-        const v = typeof info?.version === "string" ? info.version : "?";
-
-        updaterLogLine("update-downloaded", v);
-
-        const win = getPrimaryBrowserWindow();
-
-        try {
-          showUpdaterToast("Ready to install", `Restart Myvault to update to ${v}.`);
-
-          const res = await dialog.showMessageBox(win ?? undefined, {
-            type: "question",
-            title: "Restart to update",
-            message: `Version ${v} has been downloaded.`,
-            detail:
-              "Restart now to finish installing this update, or postpone and install later (update applies on next quit if you enabled background install).",
-            buttons: ["Restart now", "Later"],
-            defaultId: 0,
-            cancelId: 1,
-            noLink: true,
-          });
-
-          updaterLogLine("user-choice restart buttons", String(res.response));
-
-          if (res.response === 0) {
-            setImmediate(() => {
-              autoUpdater.quitAndInstall(false, true);
-            });
-          }
-
-        } catch (e) {
-          updaterLogLine("update-downloaded flow error", String(e?.message ?? e ?? "?"));
-        }
-
-      });
-
-      autoUpdater.on("error", (err) =>
-        updaterLogLine(`error ${String(err?.message ?? err ?? "")}`)
-      );
-
-      void autoUpdater.checkForUpdates().catch((e) => {
-        updaterLogLine(`checkForUpdates fatal ${String(e?.message ?? e ?? "?")}`);
-      });
-
-      const recheckMs = 4 * 60 * 60 * 1000;
-
-      const intervalId = setInterval(() => {
-
-        //
-
-        try {
-
-          autoUpdater.checkForUpdates().catch((e) => {
-
-            updaterLogLine(`interval check error ${String(e?.message ?? e ?? "?")}`);
-
-          });
-
-        } catch (e) {
-
-          updaterLogLine(`interval check outer ${String(e?.message ?? e ?? "?")}`);
-
-        }
-
-
-      }, recheckMs);
-
-      app.once("quit", () => clearInterval(intervalId));
+      return;
     }
+
+    const { autoUpdater } = require("electron-updater");
+
+    appUpdaterRef = autoUpdater;
+
+    //
+
+    autoUpdater.allowPrerelease = false;
+
+    autoUpdater.autoDownload = false;
+
+    autoUpdater.autoInstallOnAppQuit = true;
+
+    updaterLogLine(`start check app=${String(app.getVersion())}`);
+
+    //
+
+    autoUpdater.on("checking-for-update", () => {
+      updaterLogLine("checking-for-update");
+
+      broadcastUpdaterEvent({ kind: "checking", currentVersion: app.getVersion() });
+    });
+
+    autoUpdater.on("update-available", (info) => {
+      const v = typeof info?.version === "string" ? info.version : "?";
+
+      updaterLogLine("update-available", v, info?.releaseName ?? "");
+
+      if (declinedUpdaterVersions.has(v)) {
+        updaterLogLine("skipped broadcast — download declined earlier", v);
+
+        return;
+      }
+
+      showUpdaterToast(
+
+        `Update available (${v})`,
+
+        "Open Extension → App updates to download and install."
+
+      );
+
+      broadcastUpdaterEvent({
+        kind: "available",
+
+        currentVersion: app.getVersion(),
+
+        version: v,
+
+        releaseName: typeof info?.releaseName === "string" ? info.releaseName : "",
+
+        releaseDate: info?.releaseDate != null ? String(info.releaseDate) : "",
+      });
+
+    });
+
+    autoUpdater.on("update-not-available", (info) => {
+
+      const remoteVer = typeof info?.version === "string" ? info.version : "";
+
+      updaterLogLine(
+        "update-not-available",
+
+        remoteVer ? `remote=${remoteVer}` : ""
+
+      );
+
+      broadcastUpdaterEvent({
+        kind: "none",
+
+        currentVersion: app.getVersion(),
+
+        remoteVersion: remoteVer,
+      });
+
+    });
+
+    autoUpdater.on("download-progress", (p) => {
+
+      const pct = Math.round(Number(p.percent) || 0);
+
+      updaterLogLine(`download ${pct}%`);
+
+      broadcastUpdaterEvent({ kind: "progress", percent: pct });
+
+    });
+
+    autoUpdater.on("update-downloaded", (info) => {
+
+      const v = typeof info?.version === "string" ? info.version : "?";
+
+      updaterLogLine("update-downloaded", v);
+
+      showUpdaterToast("Ready to install", `Use Extension → App updates → Restart.`);
+
+      broadcastUpdaterEvent({
+        kind: "downloaded",
+
+        version: v,
+      });
+
+    });
+
+    autoUpdater.on("error", (err) => {
+
+      const msg = String(err?.message ?? err ?? "");
+
+      updaterLogLine(`error ${msg}`);
+
+      broadcastUpdaterEvent({ kind: "error", message: msg });
+
+    });
+
+    void autoUpdater.checkForUpdates().catch((e) => {
+
+      updaterLogLine(`checkForUpdates fatal ${String(e?.message ?? e ?? "?")}`);
+
+    });
+
+    const recheckMs = 4 * 60 * 60 * 1000;
+
+    const intervalId = setInterval(() => {
+
+      //
+
+      try {
+
+        autoUpdater.checkForUpdates().catch((e) => {
+
+          updaterLogLine(`interval check error ${String(e?.message ?? e ?? "?")}`);
+
+        });
+
+      } catch (e) {
+
+        updaterLogLine(`interval check outer ${String(e?.message ?? e ?? "?")}`);
+
+      }
+
+    }, recheckMs);
+
+    app.once("quit", () => clearInterval(intervalId));
+
+    //
 
   } catch (e) {
     updaterLogLine(`maybeAutoUpdater catch ${String(e?.message ?? e ?? "?")}`);
@@ -944,7 +1138,113 @@ app.whenReady().then(async () => {
 
   await openDatabase(app.getPath("userData"));
 
+  const uninstallPurge =
+    app.isPackaged &&
+    process.argv.some((a) => {
+
+      try {
+
+        return String(a).replace(/^["']+|["']+$/g, "").trim() === "--uninstall-purge-cloud";
+
+      } catch {
+
+
+
+        //
+
+        return false;
+
+      }
+
+    });
+
+  //
+
+  if (uninstallPurge) {
+
+    try {
+
+      let mail = "";
+
+      if (await vault.hasVault()) {
+
+        mail = await vault.getRegistrationMail();
+
+      }
+
+      if (!mail && process.platform === "win32") {
+
+        mail =
+          winUninstallMail.readRegMailForUninstall() ||
+          winUninstallMail.readFileFallbackMail();
+
+      }
+
+      let clearMirrorSafe = false;
+
+      if (!mail || !supabaseSync.isConfigured()) {
+
+        clearMirrorSafe = true;
+
+      } else {
+
+        await supabaseSync.deleteVaultCloudRow(mail);
+
+        clearMirrorSafe = true;
+
+      }
+
+      if (process.platform === "win32" && clearMirrorSafe) {
+
+        try {
+
+          winUninstallMail.clearRegMailBackup();
+
+        } catch {
+
+          //
+
+        }
+
+      }
+
+    } catch (e) {
+
+      try {
+
+        updaterLogLine(
+          `uninstall-purge ${String(e?.message ?? e ?? "?")}`
+        );
+
+        fs.appendFileSync(
+
+          path.join(app.getPath("userData"), "uninstall-purge.log"),
+
+          `[${new Date().toISOString()}] ${String(e?.message ?? e ?? "?")}\n`
+
+        );
+
+      } catch {
+
+
+        //
+
+      }
+
+    }
+
+    app.quit();
+
+    return;
+
+  }
+
   startLocalServer(API_PORT);
+
+
+  //
+
+  maybeAutoUpdater();
 
 
   //
@@ -955,11 +1255,6 @@ app.whenReady().then(async () => {
   //
 
   createWindow();
-
-
-  //
-
-  maybeAutoUpdater();
 
 
 });

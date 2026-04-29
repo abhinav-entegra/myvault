@@ -26,6 +26,18 @@ function truncateNote(s, maxLen) {
   return t.length > maxLen ? `${t.slice(0, maxLen)}…` : t;
 }
 
+/** Labels electron-updater ISO release timestamps from feed / IPC. */
+function formatUpdaterDate(isoOrStr) {
+  if (!isoOrStr || typeof isoOrStr !== "string") return "";
+  try {
+    const d = new Date(isoOrStr);
+    if (Number.isNaN(d.getTime())) return "";
+    return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  } catch {
+    return "";
+  }
+}
+
 function generatePassword(len = 20) {
   const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
   const lower = "abcdefghijkmnopqrstuvwxyz";
@@ -232,6 +244,91 @@ function WindowShell({ children, subtitle, title }) {
   );
 }
 
+function GlassUpdaterAvailableModal({ version, releaseName, releaseDateLabel, onUpdate, onDecline }) {
+  return (
+    <div className="fixed inset-0 z-[75] flex items-center justify-center p-5 sm:p-8">
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/40 backdrop-blur-md"
+        aria-label="Dismiss update dialog"
+        onClick={onDecline}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="relative z-10 w-full max-w-[420px] rounded-[22px] border border-white/35 bg-white/[0.72] p-8 shadow-[0_32px_120px_rgba(0,0,0,0.18)] backdrop-blur-xl"
+      >
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-vault-muted">New release</div>
+        <h2 className="mt-2 text-lg font-semibold tracking-tight text-vault-text">Update available</h2>
+        <p className="mt-4 text-sm leading-relaxed text-vault-muted">
+          <span className="font-medium text-vault-text">{version}</span>
+          {releaseName ? <> · {releaseName}</> : null}
+        </p>
+        {releaseDateLabel ? (
+          <p className="mt-3 text-[12px] text-vault-muted">Published {releaseDateLabel}</p>
+        ) : null}
+        <div className="mt-8 flex flex-wrap justify-end gap-3">
+          <button
+            type="button"
+            className="rounded-xl px-5 py-2.5 text-sm font-medium text-vault-muted transition hover:bg-black/[0.05]"
+            onClick={onDecline}
+          >
+            Decline
+          </button>
+          <button
+            type="button"
+            className="rounded-xl bg-apple-blue px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-apple-blue/20 transition hover:bg-[#0066d6]"
+            onClick={onUpdate}
+          >
+            Update
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GlassUpdaterReadyModal({ version, onRestart, onLater }) {
+  return (
+    <div className="fixed inset-0 z-[75] flex items-center justify-center p-5 sm:p-8">
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/40 backdrop-blur-md"
+        aria-label="Dismiss"
+        onClick={onLater}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="relative z-10 w-full max-w-[420px] rounded-[22px] border border-white/35 bg-white/[0.72] p-8 shadow-[0_32px_120px_rgba(0,0,0,0.18)] backdrop-blur-xl"
+      >
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-vault-muted">Ready</div>
+        <h2 className="mt-2 text-lg font-semibold tracking-tight text-vault-text">Restart to finish</h2>
+        <p className="mt-4 text-sm leading-relaxed text-vault-muted">
+          Version <span className="font-medium text-vault-text">{version}</span> is downloaded.
+          Restart the app to switch to this version now.
+        </p>
+        <div className="mt-8 flex flex-wrap justify-end gap-3">
+          <button
+            type="button"
+            className="rounded-xl px-5 py-2.5 text-sm font-medium text-vault-muted transition hover:bg-black/[0.05]"
+            onClick={onLater}
+          >
+            Later
+          </button>
+          <button
+            type="button"
+            className="rounded-xl bg-apple-blue px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-apple-blue/20 transition hover:bg-[#0066d6]"
+            onClick={onRestart}
+          >
+            Restart now
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [bootError, setBootError] = useState(null);
   const [checking, setChecking] = useState(true);
@@ -282,6 +379,15 @@ export default function App() {
   const [pendingDelete, setPendingDelete] = useState(null);
   const [floatNoteSync, setFloatNoteSync] = useState(0);
   const [vaultPinnedFront, setVaultPinnedFront] = useState(false);
+  const [updaterPackaged, setUpdaterPackaged] = useState(null);
+  const [installedAppVersion, setInstalledAppVersion] = useState("");
+  const [updaterLastCheckIso, setUpdaterLastCheckIso] = useState("");
+  const [updaterOffer, setUpdaterOffer] = useState(null);
+  const [updaterDownloadProgress, setUpdaterDownloadProgress] = useState(null);
+  const [updaterDownloadedVersion, setUpdaterDownloadedVersion] = useState(null);
+  const [updaterChecking, setUpdaterChecking] = useState(false);
+  const [updaterModal, setUpdaterModal] = useState(null);
+  const [updaterDlBusy, setUpdaterDlBusy] = useState(false);
 
   const setPinnedAndSync = useCallback((v) => {
     const next = !!v;
@@ -357,6 +463,80 @@ export default function App() {
     showToast,
   ]);
 
+  const declineUpdaterPrompt = useCallback(async () => {
+    const ver = updaterOffer?.version;
+    if (
+      typeof ver === "string" &&
+      ver.length > 0 &&
+      typeof api?.declineUpdaterVersion === "function"
+    ) {
+      await api.declineUpdaterVersion(ver);
+    }
+    setUpdaterModal(null);
+  }, [updaterOffer]);
+
+  const beginUpdaterDownload = useCallback(async () => {
+    if (typeof api?.downloadAvailableUpdate !== "function") return;
+    setUpdaterModal(null);
+    setUpdaterDlBusy(true);
+    setUpdaterDownloadProgress(0);
+    try {
+      const r = await api.downloadAvailableUpdate();
+      if (!r?.ok) {
+        showToast(String(r?.error || "Download failed").slice(0, 160));
+        setUpdaterDownloadProgress(null);
+      }
+    } finally {
+      setUpdaterDlBusy(false);
+    }
+  }, [showToast]);
+
+  const checkUpdatesFromUi = useCallback(async () => {
+    if (typeof api?.checkForUpdatesManual !== "function") {
+      showToast("Updater is not available.");
+      return;
+    }
+    setUpdaterChecking(true);
+    try {
+      const r = await api.checkForUpdatesManual();
+      setUpdaterLastCheckIso(new Date().toISOString());
+      if (!r?.ok) {
+        showToast(String(r?.error ?? "Could not check for updates.").slice(0, 160));
+        return;
+      }
+      if (r.packaged === false) {
+        setUpdaterOffer(null);
+        setUpdaterModal(null);
+        showToast("Use the packaged app from GitHub Releases to receive updates.");
+        return;
+      }
+      if (r.isUpdateAvailable && r.updateInfo && typeof r.updateInfo.version === "string") {
+        setUpdaterOffer({
+          version: r.updateInfo.version,
+          releaseName:
+            typeof r.updateInfo.releaseName === "string" ? r.updateInfo.releaseName : "",
+          releaseDate:
+            typeof r.updateInfo.releaseDate === "string" ? r.updateInfo.releaseDate : "",
+        });
+        setUpdaterModal("available");
+      } else {
+        setUpdaterOffer(null);
+        setUpdaterModal(null);
+        showToast("You're on the latest version.");
+      }
+    } finally {
+      setUpdaterChecking(false);
+    }
+  }, [showToast]);
+
+  const quitAndInstallFromUi = useCallback(() => {
+    if (typeof api?.quitAndInstallUpdate !== "function") return;
+    setUpdaterModal(null);
+    void api.quitAndInstallUpdate();
+  }, []);
+
+  const dismissReadyUpdaterModal = useCallback(() => setUpdaterModal(null), []);
+
   const refreshCategories = useCallback(async () => {
     try {
       const rows = await api.listCategories();
@@ -426,11 +606,64 @@ export default function App() {
   }, [unlocked, handleNotesChanged]);
 
   useEffect(() => {
+    if (!unlocked || typeof api?.onUpdaterEvent !== "function") return undefined;
+    return api.onUpdaterEvent((ev) => {
+      if (!ev || typeof ev !== "object") return;
+      if (ev.kind === "checking") return;
+      if (ev.kind === "progress") {
+        const pct = Number(ev.percent);
+        if (Number.isFinite(pct)) {
+          const n = Math.min(100, Math.max(0, Math.round(pct)));
+          setUpdaterDownloadProgress(n);
+        }
+        return;
+      }
+      if (ev.kind === "available") {
+        setUpdaterOffer({
+          version: String(ev.version ?? ""),
+          releaseName: typeof ev.releaseName === "string" ? ev.releaseName : "",
+          releaseDate: typeof ev.releaseDate === "string" ? ev.releaseDate : "",
+        });
+        setUpdaterModal((prev) => (prev === "ready" ? "ready" : "available"));
+        return;
+      }
+      if (ev.kind === "none") {
+        return;
+      }
+      if (ev.kind === "downloaded") {
+        const v = String(ev.version ?? "");
+        setUpdaterDownloadedVersion(v.length > 0 ? v : null);
+        setUpdaterDownloadProgress(null);
+        setUpdaterModal("ready");
+        return;
+      }
+      if (ev.kind === "error") {
+        showToast(String(ev.message ?? "Update error").slice(0, 160));
+      }
+    });
+  }, [unlocked, showToast]);
+
+  useEffect(() => {
     async function probe() {
       try {
         const hv = await api.hasVault();
         setVaultExists(hv);
         setApiBaseUrl(await api.getApiBaseUrl());
+        if (typeof api.isPackaged === "function") {
+          try {
+            setUpdaterPackaged(await api.isPackaged());
+          } catch {
+            setUpdaterPackaged(null);
+          }
+        }
+        if (typeof api.getAppVersion === "function") {
+          try {
+            const v = await api.getAppVersion();
+            if (typeof v === "string") setInstalledAppVersion(v);
+          } catch {
+            //
+          }
+        }
         if (typeof api.getSupabaseRegistration === "function") {
           try {
             const sr = await api.getSupabaseRegistration();
@@ -1372,6 +1605,113 @@ export default function App() {
                     </button>
                   </div>
                 </div>
+                <div className="glass-panel rounded-2xl p-6">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
+                    App updates
+                  </div>
+                  <p className="mt-2 text-[13px] leading-relaxed text-vault-muted">
+                    Check installers published via GitHub Releases. After downloading, restart once to finish
+                    the update.
+                  </p>
+                  <div className="mt-5 flex flex-wrap items-end gap-x-6 gap-y-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={
+                          updaterPackaged === false ||
+                          updaterChecking ||
+                          typeof api?.checkForUpdatesManual !== "function"
+                        }
+                        title={
+                          updaterPackaged === false
+                            ? "Use the packaged desktop app"
+                            : "Compare this build with the latest GitHub release"
+                        }
+                        className="rounded-xl border border-black/[0.08] bg-white px-4 py-2 text-xs font-medium shadow-sm transition hover:bg-black/[0.02] disabled:cursor-not-allowed disabled:opacity-50"
+                        onClick={() => void checkUpdatesFromUi()}
+                      >
+                        {updaterChecking ? "Checking…" : "Check for updates"}
+                      </button>
+                      {updaterDlBusy ? (
+                        <span className="text-xs text-vault-muted">Downloading…</span>
+                      ) : null}
+                    </div>
+                    <div className="min-w-[200px] flex-1 space-y-1 text-right text-[11px] leading-snug text-vault-muted sm:ml-auto">
+                      <div>
+                        Last checked:{" "}
+                        {updaterLastCheckIso
+                          ? formatUpdaterDate(updaterLastCheckIso)
+                          : "—"}
+                      </div>
+                      {installedAppVersion ? <div>This build: {installedAppVersion}</div> : null}
+                      {updaterOffer?.releaseDate ? (
+                        <div>Latest release: {formatUpdaterDate(updaterOffer.releaseDate)}</div>
+                      ) : null}
+                    </div>
+                  </div>
+                  {typeof updaterDownloadProgress === "number" ? (
+                    <div className="mt-5">
+                      <div className="h-2 overflow-hidden rounded-full bg-black/[0.06]">
+                        <div
+                          className="h-2 rounded-full bg-apple-blue transition-[width] duration-300"
+                          style={{
+                            width: `${Math.min(
+                              100,
+                              Math.max(0, updaterDownloadProgress || 0)
+                            )}%`,
+                          }}
+                        />
+                      </div>
+                      <div className="mt-2 text-[11px] text-vault-muted tabular-nums">
+                        Download progress {updaterDownloadProgress}%
+                      </div>
+                    </div>
+                  ) : null}
+                  {updaterPackaged === false ? (
+                    <p className="mt-4 text-[12px] text-vault-muted">
+                      Install the packaged desktop app from a release installer to enable in-app updates.
+                    </p>
+                  ) : null}
+                  {updaterOffer && updaterPackaged !== false ? (
+                    <div className="mt-5 rounded-xl border border-apple-blue/20 bg-white/65 px-4 py-3 shadow-sm backdrop-blur-sm">
+                      <div className="text-[13px] font-semibold text-vault-text">
+                        {updaterDownloadedVersion &&
+                        updaterOffer &&
+                        updaterDownloadedVersion === updaterOffer.version
+                          ? `Update ready · ${updaterOffer.version}`
+                          : `New update available · ${updaterOffer.version}${updaterOffer.releaseName ? ` · ${updaterOffer.releaseName}` : ""}`}
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {!(
+                          updaterOffer &&
+                          updaterDownloadedVersion &&
+                          updaterDownloadedVersion === updaterOffer.version
+                        ) ? (
+                          <button
+                            type="button"
+                            disabled={
+                              updaterDlBusy ||
+                              typeof api?.downloadAvailableUpdate !== "function"
+                            }
+                            className="rounded-xl bg-apple-blue px-4 py-2 text-xs font-semibold text-white shadow-md shadow-apple-blue/20 transition hover:bg-[#0066d6] disabled:cursor-not-allowed disabled:opacity-50"
+                            onClick={() => void beginUpdaterDownload()}
+                          >
+                            {updaterDlBusy ? "Downloading…" : "Download & update"}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={typeof api?.quitAndInstallUpdate !== "function"}
+                            className="rounded-xl bg-apple-blue px-4 py-2 text-xs font-semibold text-white shadow-md shadow-apple-blue/20 transition hover:bg-[#0066d6] disabled:cursor-not-allowed disabled:opacity-50"
+                            onClick={quitAndInstallFromUi}
+                          >
+                            Restart to install now
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </>
           ) : pane === "notes" ? (
@@ -2006,6 +2346,26 @@ export default function App() {
               window.alert(e.message || String(e));
             }
           }}
+        />
+      ) : null}
+
+      {updaterModal === "available" && updaterOffer ? (
+        <GlassUpdaterAvailableModal
+          version={updaterOffer.version}
+          releaseName={updaterOffer.releaseName || ""}
+          releaseDateLabel={
+            updaterOffer.releaseDate ? formatUpdaterDate(updaterOffer.releaseDate) : ""
+          }
+          onUpdate={() => void beginUpdaterDownload()}
+          onDecline={() => void declineUpdaterPrompt()}
+        />
+      ) : null}
+
+      {updaterModal === "ready" && updaterDownloadedVersion ? (
+        <GlassUpdaterReadyModal
+          version={updaterDownloadedVersion}
+          onRestart={quitAndInstallFromUi}
+          onLater={dismissReadyUpdaterModal}
         />
       ) : null}
 

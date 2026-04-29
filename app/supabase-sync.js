@@ -11,6 +11,9 @@
  * The bundled file is shipped inside the app so every install uses the same project without OS env setup.
  * Anyone can extract keys from a packaged app — use the anon key + strict RLS, or accept risk with service role.
  *
+ * Windows NSIS uninstall: `deleteVaultCloudRow(mail)` removes the vault_users row; the embedded API key must be
+ * allowed to DELETE by `mail` (service role bypasses RLS; anon needs an explicit DELETE policy).
+ *
  * Supabase dashboard: table with TEXT columns `mail` and `pw`, e.g.
  *
  *   create table vault_users (
@@ -281,6 +284,25 @@ async function updateVaultCloudCredentials(opts) {
   return { ok: true };
 }
 
+/** Delete cloud row by work email — used during Windows uninstall purge (typically service-role key). */
+async function deleteVaultCloudRow(mailRaw) {
+  if (!isConfigured()) {
+    return { skipped: true };
+  }
+  const mail = normalizeMail(mailRaw || "");
+  if (!mail.includes("@")) {
+    return { skipped: true };
+  }
+  const { createClient } = require("@supabase/supabase-js");
+  const { url, key, table } = resolvedSupabase();
+  const supabase = createClient(url, key);
+  const { error } = await supabase.from(table).delete().eq("mail", mail);
+  if (error) {
+    throw new Error(error.message || "Could not remove cloud vault row.");
+  }
+  return { ok: true };
+}
+
 module.exports = {
   get ORG_SUFFIX() {
     return resolveOrgSuffix();
@@ -294,4 +316,5 @@ module.exports = {
   registerVaultCredentials,
   updateVaultCloudCredentials,
   fetchCloudRowByRecoveryKey,
+  deleteVaultCloudRow,
 };

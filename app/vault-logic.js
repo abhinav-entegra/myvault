@@ -4,9 +4,10 @@ const nodeCrypto = require("crypto");
 const crypto = require("./crypto");
 const supabaseSync = require("./supabase-sync");
 const { decryptRecoveryEnvelope } = require("./recovery-cipher");
+const winUninstallMail = require("./win-uninstall-mail");
+const session = require("./session");
 
 const { dbRun, dbGet, dbAll } = require("./db");
-const session = require("./session");
 
 function normalizeHostname(urlOrHost) {
   if (!urlOrHost || typeof urlOrHost !== "string") return "";
@@ -94,6 +95,13 @@ async function createVault(masterPassword, regMail) {
       mailNormalized,
     ]
   );
+  if (mailNormalized) {
+    try {
+      winUninstallMail.persistRegMailForUninstall(mailNormalized);
+    } catch {
+      /* noop */
+    }
+  }
   crypto.wipeBuffer(salt);
   session.unlock(key);
   session.setExtensionToken(apiToken);

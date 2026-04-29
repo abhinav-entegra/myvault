@@ -73,4 +73,24 @@ contextBridge.exposeInMainWorld("vaultApi", {
     ipcRenderer.on("window:maximized-state", fn);
     return () => ipcRenderer.removeListener("window:maximized-state", fn);
   },
+
+  /** Packaged Electron build (auto-update IPCs behave as no-op in dev). */
+  isPackaged: () => ipcRenderer.invoke("app:is-packaged"),
+
+  getAppVersion: () => ipcRenderer.invoke("app:get-version"),
+
+  checkForUpdatesManual: () => ipcRenderer.invoke("updater:check"),
+
+  downloadAvailableUpdate: () => ipcRenderer.invoke("updater:download"),
+
+  quitAndInstallUpdate: () => ipcRenderer.invoke("updater:quit-install"),
+
+  declineUpdaterVersion: (version) =>
+    ipcRenderer.invoke("updater:decline-version", version),
+
+  onUpdaterEvent: (cb) => {
+    const fn = (_e, payload) => cb(payload);
+    ipcRenderer.on("app:updater-event", fn);
+    return () => ipcRenderer.removeListener("app:updater-event", fn);
+  },
 });
