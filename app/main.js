@@ -712,25 +712,66 @@ function registerIpc() {
 
 }
 
+function updaterLogLine(...parts) {
+  try {
+    const dir = app.getPath("userData");
+
+    const line = `[${new Date().toISOString()}] ${parts.map(String).join(" ")}\n`;
+
+    fs.appendFileSync(path.join(dir, "updater.log"), line);
+
+  } catch {
+    //
+  }
+}
+
 function maybeAutoUpdater() {
   try {
-
     //
 
     if (app.isPackaged) {
-
       const { autoUpdater } = require("electron-updater");
 
-      autoUpdater.checkForUpdatesAndNotify();
+      /** GitHub resolves /releases/latest to the release marked “Latest”, not necessarily highest semver. If the wrong release is Latest, updater fetches stale latest.yml — fix in repo Settings → Releases → set vCURRENT as Latest. */
 
+      autoUpdater.allowPrerelease = false;
+
+      updaterLogLine(`start check app=${String(app.getVersion())}`);
+
+      autoUpdater.on("checking-for-update", () => updaterLogLine("checking-for-update"));
+
+      autoUpdater.on("update-available", (info) =>
+        updaterLogLine("update-available", info?.version, info?.releaseName ?? "")
+      );
+
+      autoUpdater.on("update-not-available", (info) =>
+        updaterLogLine(
+          "update-not-available",
+
+          typeof info?.version === "string" ? `remote=${info.version}` : ""
+
+        )
+      );
+
+      autoUpdater.on("download-progress", (p) =>
+        updaterLogLine(`download ${Math.round(Number(p.percent) || 0)}%`)
+
+      );
+
+      autoUpdater.on("update-downloaded", (info) =>
+        updaterLogLine("update-downloaded", info?.version)
+
+      );
+
+      autoUpdater.on("error", (err) =>
+        updaterLogLine(`error ${String(err?.message ?? err ?? "")}`)
+      );
+
+      autoUpdater.checkForUpdatesAndNotify();
     }
 
-  } catch {
-
-
-
-    //
-
+  } catch (e) {
+    updaterLogLine(`maybeAutoUpdater catch ${String(e?.message ?? e ?? "?")}`);
   }
 
 }
