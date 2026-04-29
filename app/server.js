@@ -81,7 +81,11 @@ function vaultUnlocked(req, res, next) {
   next();
 }
 
-function createApp() {
+function createApp(options) {
+  /** @type {{ onCredentialSaved?: () => void } | undefined} */
+  const hooks =
+    typeof options === "function" ? { onCredentialSaved: options } : options || {};
+
   const app = express();
 
   app.use(corsMiddleware);
@@ -180,6 +184,14 @@ function createApp() {
           categoryId: body.categoryId != null ? body.categoryId : undefined,
         });
 
+        try {
+          if (typeof hooks.onCredentialSaved === "function") {
+            hooks.onCredentialSaved();
+          }
+        } catch {
+          //
+        }
+
         res.json({ status: "saved", id: r.id });
       } catch (e) {
         res.status(500).json({ error: e.message || "save failed" });
@@ -192,12 +204,12 @@ function createApp() {
 
 let serverInstance = null;
 
-function startLocalServer(port) {
+function startLocalServer(port, hooks) {
   if (serverInstance) {
     return serverInstance;
   }
 
-  const app = createApp();
+  const app = createApp(hooks);
   const server = http.createServer(app);
 
   server.listen(port, "127.0.0.1", () => {

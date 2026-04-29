@@ -54,6 +54,12 @@ contextBridge.exposeInMainWorld("vaultApi", {
     ipcRenderer.on("notes:changed", fn);
     return () => ipcRenderer.removeListener("notes:changed", fn);
   },
+  /** When extension HTTP API saves a credential — main tells renderer to refresh vault list */
+  onCredentialsChanged: (cb) => {
+    const fn = () => cb();
+    ipcRenderer.on("credentials:changed", fn);
+    return () => ipcRenderer.removeListener("credentials:changed", fn);
+  },
   listNoteFolders: () => ipcRenderer.invoke("notes:list-folders"),
   addNoteFolder: (name) => ipcRenderer.invoke("notes:add-folder", name),
   deleteNoteFolder: (id) => ipcRenderer.invoke("notes:delete-folder", id),

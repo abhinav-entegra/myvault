@@ -142,6 +142,16 @@ function broadcastUpdaterEvent(ev) {
 
 }
 
+function broadcastCredentialsChanged() {
+  try {
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed()) win.webContents.send("credentials:changed");
+    });
+  } catch {
+    //
+  }
+}
+
 function broadcastNotesChanged(payload) {
 
   try {
@@ -1239,7 +1249,11 @@ app.whenReady().then(async () => {
 
   }
 
-  startLocalServer(API_PORT);
+  startLocalServer(API_PORT, {
+    onCredentialSaved: () => {
+      broadcastCredentialsChanged();
+    },
+  });
 
 
   //

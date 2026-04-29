@@ -605,6 +605,20 @@ export default function App() {
     });
   }, [unlocked, handleNotesChanged]);
 
+  /** Extension POST /api/credentials completes in main — refresh vault list without restart */
+  useEffect(() => {
+    if (!unlocked || typeof api?.onCredentialsChanged !== "function") return undefined;
+    return api.onCredentialsChanged(() => {
+      void refreshList().then((list) => {
+        setDetailCred((cur) => {
+          if (!cur || !list) return cur;
+          const u = list.find((x) => x.id === cur.id);
+          return u || cur;
+        });
+      });
+    });
+  }, [unlocked, refreshList]);
+
   useEffect(() => {
     if (!unlocked || typeof api?.onUpdaterEvent !== "function") return undefined;
     return api.onUpdaterEvent((ev) => {
@@ -760,11 +774,33 @@ export default function App() {
     return list;
   }, [notes, noteFolderFilter, noteSearch]);
 
-  /** Sidebar omits General; items still live in General via "All categories" & forms */
+  /** Sidebar omits General; edit forms omit General but items may still resolve there in DB */
   const categoriesSidebar = useMemo(
     () => categories.filter((c) => String(c.name).toLowerCase() !== "general"),
     [categories]
   );
+
+  /** Category pickers inside forms (omit system "General" like sidebar) */
+  const categoriesForm = categoriesSidebar;
+
+  const generalCategoryId = useMemo(
+    () => categories.find((c) => String(c.name).toLowerCase() === "general")?.id ?? null,
+    [categories]
+  );
+
+  const inboxFolderId = useMemo(
+    () =>
+      noteFolders.find((f) => String(f.name).toLowerCase() === "inbox")?.id ?? null,
+    [noteFolders]
+  );
+
+  /** Note folder dropdown: omit Inbox; if nothing else remains, fall back so the select stays valid */
+  const noteFoldersSelectable = useMemo(() => {
+    if (noteFolders.length === 0) return [];
+    if (inboxFolderId == null) return noteFolders;
+    const filtered = noteFolders.filter((f) => f.id !== inboxFolderId);
+    return filtered.length > 0 ? filtered : noteFolders;
+  }, [noteFolders, inboxFolderId]);
 
   const listFiltered = useMemo(() => {
     let list = [...items];
@@ -983,9 +1019,17 @@ export default function App() {
 
   const createNoteFromModal = async () => {
     const title = newNoteTitleInput.trim() || "Untitled";
-    const inbox = noteFolders.find((f) => f.name === "Inbox");
-    const fid =
-      noteFolderFilter != null ? noteFolderFilter : inbox?.id ?? noteFolders[0]?.id;
+    const nonInbox = noteFolders.filter((f) => String(f.name).toLowerCase() !== "inbox");
+    let fid =
+      noteFolderFilter != null ? noteFolderFilter : nonInbox[0]?.id ?? noteFolders[0]?.id;
+    if (
+      fid != null &&
+      inboxFolderId != null &&
+      Number(fid) === Number(inboxFolderId) &&
+      nonInbox.length > 0
+    ) {
+      fid = nonInbox[0].id;
+    }
     if (fid == null) {
       window.alert("No note folder available.");
       return;
@@ -1032,10 +1076,11 @@ export default function App() {
   };
 
   const openAddCredential = () => {
+    const vis = categories.filter((c) => String(c.name).toLowerCase() !== "general");
     const gid =
-      categoryFilter ??
-      categories.find((c) => c.name === "General")?.id ??
-      categories[0]?.id;
+      categoryFilter != null && vis.some((c) => c.id === categoryFilter)
+        ? categoryFilter
+        : vis[0]?.id ?? categories[0]?.id;
     setCredModal({
       url: "",
       username: "",
@@ -2198,7 +2243,8 @@ export default function App() {
 
       {credModal ? (
         <CredentialModal
-          categories={categories}
+          categories={categoriesForm}
+          generalCategoryId={generalCategoryId}
           initial={credModal}
           onClose={() => setCredModal(null)}
           onSave={async (payload) => {
@@ -2308,7 +2354,8 @@ export default function App() {
         <VaultNoteEditorModal
           key={noteEditorNote.id}
           note={noteEditorNote}
-          folders={noteFolders}
+          folders={noteFoldersSelectable}
+          inboxFolderId={inboxFolderId}
           onClose={() => setNoteEditorNote(null)}
           onAutosaved={refreshNotes}
           onDeleteRequest={() =>
@@ -2573,6 +2620,7 @@ function FloatNoteWindow({ noteId, syncBump, refreshNotes }) {
 function VaultNoteEditorModal({
   note,
   folders,
+  inboxFolderId,
   onClose,
   onAutosaved,
   onDeleteRequest,
@@ -2601,19 +2649,29 @@ function VaultNoteEditorModal({
     const t = note.title || "";
     const b = note.body || "";
     const fav = !!note.favorite;
+    let fid = note.folderId;
+    if (
+      inboxFolderId != null &&
+      Number(fid) === Number(inboxFolderId) &&
+      folders.length > 0
+    ) {
+      fid = folders[0].id;
+    } else if (folders.length > 0 && !folders.some((f) => Number(f.id) === Number(fid))) {
+      fid = folders[0].id;
+    }
     setTitle(t);
     setBody(b);
     setColor(c);
-    setFolderId(note.folderId);
+    setFolderId(fid);
     setFavorite(fav);
     stateRef.current = {
       title: t,
       body: b,
       color: c,
-      folderId: note.folderId,
+      folderId: fid,
       favorite: fav,
     };
-  }, [note.id, note.updatedAt]);
+  }, [note.id, note.updatedAt, note.folderId, folders, inboxFolderId]);
 
   useEffect(() => {
     return () => {
@@ -3320,7 +3378,14 @@ function TokenMask() {
   return text;
 }
 
-function CredentialModal({ categories, initial, onClose, onSave, generatePassword }) {
+function CredentialModal({
+  categories,
+  generalCategoryId,
+  initial,
+  onClose,
+  onSave,
+  generatePassword,
+}) {
   const [url, setUrl] = useState(initial.url || "");
   const [username, setUsername] = useState(initial.username || "");
   const [password, setPassword] = useState(initial.password || "");
@@ -3339,8 +3404,22 @@ function CredentialModal({ categories, initial, onClose, onSave, generatePasswor
     setTitle(initial.appName ?? initial.titleRaw ?? "");
     setNotes(initial.notes || "");
     setFavorite(!!initial.favorite);
-    setCategoryId(initial.categoryId ?? categories[0]?.id ?? "");
-  }, [initial, categories]);
+    const firstId = categories[0]?.id ?? "";
+    let cid = initial.categoryId ?? firstId;
+    if (
+      generalCategoryId != null &&
+      Number(cid) === Number(generalCategoryId)
+    ) {
+      cid = firstId;
+    } else if (
+      cid !== "" &&
+      categories.length > 0 &&
+      !categories.some((c) => Number(c.id) === Number(cid))
+    ) {
+      cid = firstId;
+    }
+    setCategoryId(cid);
+  }, [initial, categories, generalCategoryId]);
 
   return (
     <div className="fixed inset-0 z-50 flex min-h-0 items-end justify-center overflow-hidden sm:items-center sm:p-6">
