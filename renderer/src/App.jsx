@@ -536,7 +536,7 @@ export default function App() {
       setCategoryFilter(null);
       setPane("items");
     } catch (e) {
-      setFormError(e.message || "Unlock failed");
+      setFormError(String(e?.message || e).trim() || "Unlock failed");
       setMp("");
     } finally {
       setBusy(false);

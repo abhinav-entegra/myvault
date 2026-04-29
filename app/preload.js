@@ -7,7 +7,22 @@ contextBridge.exposeInMainWorld("vaultApi", {
   getSupabaseRegistration: () =>
     ipcRenderer.invoke("app:supabase-registration"),
   createVault: (payload) => ipcRenderer.invoke("vault:create", payload),
-  unlock: (masterPassword) => ipcRenderer.invoke("vault:unlock", masterPassword),
+  unlock: async (masterPassword) => {
+    try {
+      return await ipcRenderer.invoke("vault:unlock", masterPassword);
+    } catch (e) {
+      const combined = [
+        e?.message,
+        typeof e?.cause?.message === "string" ? e.cause.message : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      if (/Invalid master password/i.test(combined)) {
+        throw new Error("Invalid password");
+      }
+      throw e;
+    }
+  },
   lock: () => ipcRenderer.invoke("vault:lock"),
   vaultIsUnlocked: () => ipcRenderer.invoke("vault:is-unlocked"),
   setMainAlwaysOnTop: (flag) => ipcRenderer.invoke("window:set-main-always-on-top", flag),
