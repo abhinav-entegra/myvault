@@ -24,6 +24,9 @@ contextBridge.exposeInMainWorld("vaultApi", {
     }
   },
   lock: () => ipcRenderer.invoke("vault:lock"),
+  getRegistrationMail: () => ipcRenderer.invoke("vault:get-registration-mail"),
+  resetMasterPasswordFromRecovery: (payload) =>
+    ipcRenderer.invoke("vault:reset-from-recovery", payload || {}),
   vaultIsUnlocked: () => ipcRenderer.invoke("vault:is-unlocked"),
   setMainAlwaysOnTop: (flag) => ipcRenderer.invoke("window:set-main-always-on-top", flag),
   listCategories: () => ipcRenderer.invoke("vault:list-categories"),

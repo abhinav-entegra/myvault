@@ -2,6 +2,9 @@
 
 const nodeCrypto = require("crypto");
 const crypto = require("./crypto");
+const supabaseSync = require("./supabase-sync");
+const { decryptRecoveryEnvelope } = require("./recovery-cipher");
+
 const { dbRun, dbGet, dbAll } = require("./db");
 const session = require("./session");
 
@@ -65,7 +68,7 @@ async function hasVault() {
   return !!row;
 }
 
-async function createVault(masterPassword) {
+async function createVault(masterPassword, regMail) {
   if (await hasVault()) {
     throw new Error("Vault already exists");
   }
@@ -75,10 +78,21 @@ async function createVault(masterPassword) {
   const key = await crypto.deriveMasterKey(masterPassword, salt);
   const verifier = await crypto.encryptVerifier(key);
   const apiToken = nodeCrypto.randomBytes(32).toString("hex");
+  const mailNormalized =
+    typeof regMail === "string" && regMail.trim()
+      ? regMail.trim().toLowerCase()
+      : null;
   await dbRun(
-    `INSERT INTO settings (id, kdf_salt, verifier_iv, verifier_tag, verifier_data, api_token)
-     VALUES (1, ?, ?, ?, ?, ?)`,
-    [salt.toString("hex"), verifier.iv, verifier.tag, verifier.data, apiToken]
+    `INSERT INTO settings (id, kdf_salt, verifier_iv, verifier_tag, verifier_data, api_token, reg_mail)
+     VALUES (1, ?, ?, ?, ?, ?, ?)`,
+    [
+      salt.toString("hex"),
+      verifier.iv,
+      verifier.tag,
+      verifier.data,
+      apiToken,
+      mailNormalized,
+    ]
   );
   crypto.wipeBuffer(salt);
   session.unlock(key);
@@ -533,6 +547,163 @@ async function deleteVaultNote(id) {
   return { ok: true, id };
 }
 
+async function getRegistrationMail() {
+  const row = await dbGet(`SELECT reg_mail FROM settings WHERE id = 1`);
+  const m = row?.reg_mail;
+  return typeof m === "string" ? m.trim() : "";
+}
+
+async function verifyMasterPasswordAgainstVault(masterPassword) {
+  const row = await dbGet(
+    `SELECT kdf_salt, verifier_iv, verifier_tag, verifier_data FROM settings WHERE id = 1`
+  );
+  if (!row) return false;
+  const salt = Buffer.from(row.kdf_salt, "hex");
+  const key = await crypto.deriveMasterKey(masterPassword, salt);
+  crypto.wipeBuffer(salt);
+  const verifierPayload = {
+    iv: row.verifier_iv,
+    tag: row.verifier_tag,
+    data: row.verifier_data,
+  };
+  const ok = crypto.verifyDecrypt(verifierPayload, key);
+  crypto.wipeBuffer(key);
+  return ok;
+}
+
+async function rekeyEncryptedRows(oldKey, newKey) {
+  const creRows = await dbAll(
+    `SELECT id, category_id, enc_iv, enc_tag, enc_data FROM credentials`
+  );
+  for (const r of creRows) {
+    const plain = crypto.decryptJson(
+      { iv: r.enc_iv, tag: r.enc_tag, data: r.enc_data },
+      oldKey
+    );
+    const enc = crypto.encryptJson(plain, newKey);
+    await dbRun(
+      `UPDATE credentials SET category_id = ?, enc_iv = ?, enc_tag = ?, enc_data = ?
+       WHERE id = ?`,
+      [r.category_id, enc.iv, enc.tag, enc.data, r.id]
+    );
+  }
+  const noteRows = await dbAll(
+    `SELECT id, folder_id, enc_iv, enc_tag, enc_data, color FROM vault_notes`
+  );
+  for (const r of noteRows) {
+    const plain = crypto.decryptJson(
+      { iv: r.enc_iv, tag: r.enc_tag, data: r.enc_data },
+      oldKey
+    );
+    const enc = crypto.encryptJson(plain, newKey);
+    await dbRun(
+      `UPDATE vault_notes SET folder_id = ?, enc_iv = ?, enc_tag = ?, enc_data = ?, color = ?
+       WHERE id = ?`,
+      [r.folder_id, enc.iv, enc.tag, enc.data, r.color, r.id]
+    );
+  }
+}
+
+async function replaceMasterPasswordRetainingVault(oldMp, newMp) {
+  const row = await dbGet(
+    `SELECT kdf_salt, verifier_iv, verifier_tag, verifier_data FROM settings WHERE id = 1`
+  );
+  if (!row) throw new Error("No vault found");
+  const salt = Buffer.from(row.kdf_salt, "hex");
+  let oldKey;
+  try {
+    oldKey = await crypto.deriveMasterKey(oldMp, salt);
+    const verifierPayload = {
+      iv: row.verifier_iv,
+      tag: row.verifier_tag,
+      data: row.verifier_data,
+    };
+    if (!crypto.verifyDecrypt(verifierPayload, oldKey)) {
+      throw new Error("INVALID_RECOVERY_VERIFY");
+    }
+    const newSalt = crypto.randomSalt(32);
+    const newKey = await crypto.deriveMasterKey(newMp, newSalt);
+    const verifier = await crypto.encryptVerifier(newKey);
+    await rekeyEncryptedRows(oldKey, newKey);
+    await dbRun(
+      `UPDATE settings SET kdf_salt = ?, verifier_iv = ?, verifier_tag = ?, verifier_data = ?
+       WHERE id = 1`,
+      [newSalt.toString("hex"), verifier.iv, verifier.tag, verifier.data]
+    );
+    crypto.wipeBuffer(newKey);
+    crypto.wipeBuffer(newSalt);
+  } finally {
+    crypto.wipeBuffer(salt);
+    if (oldKey) crypto.wipeBuffer(oldKey);
+  }
+}
+
+function parseRecoveryCipherFromDb(recoveryCipherStored) {
+  if (typeof recoveryCipherStored === "string") {
+    try {
+      return JSON.parse(recoveryCipherStored);
+    } catch {
+      throw new Error("Invalid encryption key");
+    }
+  }
+  if (recoveryCipherStored && typeof recoveryCipherStored === "object") {
+    return recoveryCipherStored;
+  }
+  throw new Error("Invalid encryption key");
+}
+
+async function resetMasterPasswordFromRecovery(recoveryKeyPlain, newMp) {
+  let row;
+  try {
+    row = await supabaseSync.fetchCloudRowByRecoveryKey(recoveryKeyPlain);
+  } catch (e) {
+    const m = String(e?.message || e);
+    if (m === "INVALID_RECOVERY") {
+      throw new Error("Invalid encryption key");
+    }
+    throw e;
+  }
+  const mail = row.mail;
+  let envelope;
+  try {
+    envelope = parseRecoveryCipherFromDb(row.recovery_cipher);
+  } catch {
+    throw new Error("Invalid encryption key");
+  }
+  let candidateMp = "";
+  try {
+    candidateMp = decryptRecoveryEnvelope(envelope, mail);
+  } catch {
+    throw new Error("Invalid encryption key");
+  }
+  if (!(await verifyMasterPasswordAgainstVault(candidateMp))) {
+    throw new Error("Invalid encryption key");
+  }
+  try {
+    await replaceMasterPasswordRetainingVault(candidateMp, newMp);
+  } catch (e) {
+    if (String(e.message) === "INVALID_RECOVERY_VERIFY") {
+      throw new Error("Invalid encryption key");
+    }
+    throw e;
+  }
+  let supabaseError = null;
+  try {
+    await supabaseSync.updateVaultCloudCredentials({
+      mail,
+      plainMasterPassword: newMp,
+    });
+  } catch (e) {
+    supabaseError = e?.message || String(e);
+  }
+  const unlockResult = await unlockVault(newMp);
+  return {
+    ok: true,
+    unlockResult,
+    supabaseError,
+  };
+}
+
 module.exports = {
   normalizeHostname,
   domainMatches,
@@ -557,4 +728,6 @@ module.exports = {
   addVaultNote,
   updateVaultNote,
   deleteVaultNote,
+  getRegistrationMail,
+  resetMasterPasswordFromRecovery,
 };

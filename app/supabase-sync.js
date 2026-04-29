@@ -21,13 +21,23 @@
  *   );
  *   create unique index vault_users_mail_idx on vault_users (lower(mail));
  *
- * Column `pw` stores an argon2id hash of the master password — not plaintext.
+ * Optional columns:
+ *   recovery_key TEXT UNIQUE — random opaque string (lowercase hex) used to look up the row for
+ *   password reset; must be globally unique (no two accounts share the same key).
+ *   recovery_cipher TEXT — JSON `{ iv, tag, data }` (AES-GCM envelope of plaintext master password);
+ *   decrypt uses app + mail (`app/recovery-cipher.js`). Not shown to the user.
+ *
+ * Add with:
+ *   ALTER TABLE vault_users ADD COLUMN IF NOT EXISTS recovery_key TEXT;
+ *   CREATE UNIQUE INDEX IF NOT EXISTS vault_users_recovery_key_uidx ON vault_users (recovery_key);
  */
 
 const fs = require("fs");
 const path = require("path");
+const nodeCrypto = require("crypto");
 const argon2 = require("argon2");
 const { loadEmbeddedSupabaseConfig } = require("./embed/decrypt-supabase-payload");
+const { encryptRecoveryEnvelope } = require("./recovery-cipher");
 
 const DEFAULT_ORG_SUFFIX = "@entegrasources.com.np";
 
@@ -152,6 +162,57 @@ function isOrgEmail(mail) {
   return m.includes("@") && m.endsWith(suf);
 }
 
+function generateRecoveryKeyString() {
+  return nodeCrypto.randomBytes(24).toString("hex");
+}
+
+/** @param {string} raw */
+function normalizeRecoveryKeyPlain(raw) {
+  return String(raw || "")
+    .trim()
+    .replace(/\s+/g, "")
+    .toLowerCase();
+}
+
+/**
+ * Look up cloud row by globally unique recovery key; resolves mail server-side only.
+ * @param {string} recoveryKeyPlain
+ * @returns {Promise<{ mail: string, recovery_cipher: string }>}
+ */
+async function fetchCloudRowByRecoveryKey(recoveryKeyPlain) {
+  if (!isConfigured()) {
+    throw new Error("Cloud recovery is not configured.");
+  }
+  const k = normalizeRecoveryKeyPlain(recoveryKeyPlain);
+  if (k.length < 16) {
+    throw new Error("INVALID_RECOVERY");
+  }
+  const { createClient } = require("@supabase/supabase-js");
+  const { url, key, table } = resolvedSupabase();
+  const supabase = createClient(url, key);
+  const { data, error } = await supabase
+    .from(table)
+    .select("mail, recovery_cipher")
+    .eq("recovery_key", k)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message || "Could not verify recovery key.");
+  }
+  if (
+    !data ||
+    typeof data.recovery_cipher !== "string" ||
+    !data.recovery_cipher.trim()
+  ) {
+    throw new Error("INVALID_RECOVERY");
+  }
+  const mail = normalizeMail(data.mail || "");
+  if (!mail.includes("@")) {
+    throw new Error("INVALID_RECOVERY");
+  }
+  return { mail, recovery_cipher: data.recovery_cipher.trim() };
+}
+
 /**
  * @param {{ mail: string, plainMasterPassword: string }} opts
  * @returns {Promise<{ skipped?: true, ok?: boolean, message?: string }>}
@@ -176,15 +237,47 @@ async function registerVaultCredentials(opts) {
   }
 
   const pwHash = await argon2.hash(mp, { type: argon2.argon2id });
+  const enc = encryptRecoveryEnvelope(mp, mail);
+  const recovery_cipher = JSON.stringify(enc);
 
   const { createClient } = require("@supabase/supabase-js");
   const { url, key, table } = resolvedSupabase();
   const supabase = createClient(url, key);
 
-  const { error } = await supabase.from(table).insert({ mail, pw: pwHash });
+  const recovery_key = generateRecoveryKeyString();
+
+  const { error } = await supabase
+    .from(table)
+    .insert({ mail, pw: pwHash, recovery_cipher, recovery_key });
   if (error) {
     throw new Error(error.message || "Could not save registration to Supabase.");
   }
+  return { ok: true };
+}
+
+/**
+ * @param {{ mail: string, plainMasterPassword: string }} opts
+ * @returns {Promise<{ skipped?: true, ok?: boolean }>}
+ */
+async function updateVaultCloudCredentials(opts) {
+  if (!isConfigured()) {
+    return { skipped: true };
+  }
+  const mail = normalizeMail(opts?.mail || "");
+  if (!mail) throw new Error("Mail required for Supabase sync.");
+  const mp = opts?.plainMasterPassword;
+  if (!mp || typeof mp !== "string") throw new Error("Master password missing.");
+  const pwHash = await argon2.hash(mp, { type: argon2.argon2id });
+  const enc = encryptRecoveryEnvelope(mp, mail);
+  const recovery_cipher = JSON.stringify(enc);
+  const { createClient } = require("@supabase/supabase-js");
+  const { url, key, table } = resolvedSupabase();
+  const supabase = createClient(url, key);
+  const { error } = await supabase
+    .from(table)
+    .update({ pw: pwHash, recovery_cipher })
+    .eq("mail", mail);
+  if (error) throw new Error(error.message || "Could not update cloud registration.");
   return { ok: true };
 }
 
@@ -199,4 +292,6 @@ module.exports = {
   isOrgEmail,
   normalizeMail,
   registerVaultCredentials,
+  updateVaultCloudCredentials,
+  fetchCloudRowByRecoveryKey,
 };

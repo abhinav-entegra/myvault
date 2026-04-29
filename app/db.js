@@ -201,8 +201,14 @@ async function runMigrations() {
   await migrateFromLegacyCredentialsNoCategory();
 }
 
+async function ensureSettingsRegistrationMailColumn() {
+  if (await hasColumn("settings", "reg_mail")) return;
+  await dbRun(`ALTER TABLE settings ADD COLUMN reg_mail TEXT`);
+}
+
 async function openDatabase(userDataPath) {
   openSync(userDataPath);
+  await ensureSettingsRegistrationMailColumn();
   await runMigrations();
 }
 

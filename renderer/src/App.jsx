@@ -249,6 +249,13 @@ export default function App() {
   const [showConfirmMpVis, setShowConfirmMpVis] = useState(false);
   const [formError, setFormError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [unlockRejectedBadPw, setUnlockRejectedBadPw] = useState(false);
+  const [recoverModalOpen, setRecoverModalOpen] = useState(false);
+  const [recoveryKeyPlain, setRecoveryKeyPlain] = useState("");
+  const [recoveryNewPw, setRecoveryNewPw] = useState("");
+  const [recoveryConfirmPw, setRecoveryConfirmPw] = useState("");
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [recoveryError, setRecoveryError] = useState(null);
   const [categories, setCategories] = useState([]);
   const [categoryFilter, setCategoryFilter] = useState(null);
   const [items, setItems] = useState([]);
@@ -289,6 +296,66 @@ export default function App() {
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2000);
   }, []);
+
+  const closeRecoveryModal = useCallback(() => {
+    setRecoverModalOpen(false);
+    setRecoveryKeyPlain("");
+    setRecoveryNewPw("");
+    setRecoveryConfirmPw("");
+    setRecoveryError(null);
+    setRecoveryBusy(false);
+  }, []);
+
+  const handleRecoveryConfirm = useCallback(async () => {
+    if (typeof api?.resetMasterPasswordFromRecovery !== "function") {
+      setRecoveryError("Recovery is not available in this build.");
+      return;
+    }
+    setRecoveryError(null);
+    if (!recoveryNewPw || recoveryNewPw.length < 8) {
+      setRecoveryError("New password must be at least 8 characters.");
+      return;
+    }
+    if (recoveryNewPw !== recoveryConfirmPw) {
+      setRecoveryError("New password confirmation does not match.");
+      return;
+    }
+    const k = recoveryKeyPlain.trim().replace(/\s+/g, "");
+    if (!k || k.length < 16) {
+      setRecoveryError("Enter your full encryption recovery key (from Supabase, column recovery_key).");
+      return;
+    }
+    setRecoveryBusy(true);
+    try {
+      const res = await api.resetMasterPasswordFromRecovery({
+        recoveryKey: recoveryKeyPlain.trim(),
+        newPassword: recoveryNewPw,
+        confirmPassword: recoveryConfirmPw,
+      });
+      closeRecoveryModal();
+      setUnlockRejectedBadPw(false);
+      setFormError(null);
+      setMp("");
+      setUnlocked(true);
+      setCategoryFilter(null);
+      setPane("items");
+      if (res?.supabaseError) {
+        showToast(`Vault updated locally. Cloud sync warning: ${res.supabaseError}`);
+      } else {
+        showToast("Password reset successfully.");
+      }
+    } catch (e) {
+      setRecoveryError(String(e?.message || e).trim() || "Reset failed");
+    } finally {
+      setRecoveryBusy(false);
+    }
+  }, [
+    recoveryKeyPlain,
+    recoveryNewPw,
+    recoveryConfirmPw,
+    closeRecoveryModal,
+    showToast,
+  ]);
 
   const refreshCategories = useCallback(async () => {
     try {
@@ -394,6 +461,7 @@ export default function App() {
   useEffect(() => {
     return api.onSessionLocked(() => {
       setUnlocked(false);
+      setUnlockRejectedBadPw(false);
       setItems([]);
       setCategories([]);
       setDetailCred(null);
@@ -528,15 +596,24 @@ export default function App() {
 
   const handleUnlock = async () => {
     setFormError(null);
+    setUnlockRejectedBadPw(false);
     setBusy(true);
     try {
       await api.unlock(mp);
       setMp("");
+      setUnlockRejectedBadPw(false);
       setUnlocked(true);
       setCategoryFilter(null);
       setPane("items");
     } catch (e) {
-      setFormError(String(e?.message || e).trim() || "Unlock failed");
+      const msg = String(e?.message || e).trim();
+      setFormError(msg || "Unlock failed");
+      setUnlockRejectedBadPw(
+        !!(
+          supabaseRegistration.configured &&
+          (msg === "Invalid password" || /invalid master password/i.test(msg))
+        ),
+      );
       setMp("");
     } finally {
       setBusy(false);
@@ -781,6 +858,15 @@ export default function App() {
               Encrypted vault on this device. Organize logins by category.
             </p>
           </div>
+          <form
+            className="block w-full"
+            noValidate
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (busy) return;
+              void (vaultExists ? handleUnlock() : handleCreateVault());
+            }}
+          >
           {!vaultExists ? (
             <>
               <label className="block text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
@@ -804,6 +890,11 @@ export default function App() {
                 }
                 value={accountEmail}
                 onChange={(e) => setAccountEmail(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return;
+                  e.preventDefault();
+                  if (!busy && !vaultExists) void handleCreateVault();
+                }}
                 className="mt-2 w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2.5 text-sm text-vault-text outline-none ring-apple-blue/20 transition focus:ring-2"
               />
               <label className="mt-6 block text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
@@ -815,6 +906,11 @@ export default function App() {
                   autoComplete="new-password"
                   value={mp}
                   onChange={(e) => setMp(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter") return;
+                    e.preventDefault();
+                    if (!busy && !vaultExists) void handleCreateVault();
+                  }}
                   className="w-full rounded-xl border border-black/[0.08] bg-white py-2.5 pl-3 pr-11 text-sm text-vault-text outline-none ring-apple-blue/20 transition focus:ring-2"
                 />
                 <button
@@ -835,6 +931,11 @@ export default function App() {
                   autoComplete="new-password"
                   value={confirmMp}
                   onChange={(e) => setConfirmMp(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter") return;
+                    e.preventDefault();
+                    if (!busy && !vaultExists) void handleCreateVault();
+                  }}
                   className="w-full rounded-xl border border-black/[0.08] bg-white py-2.5 pl-3 pr-11 text-sm text-vault-text outline-none ring-apple-blue/20 transition focus:ring-2"
                 />
                 <button
@@ -863,6 +964,11 @@ export default function App() {
                   autoComplete="current-password"
                   value={mp}
                   onChange={(e) => setMp(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter") return;
+                    e.preventDefault();
+                    if (!busy && vaultExists) void handleUnlock();
+                  }}
                   className="w-full rounded-xl border border-black/[0.08] bg-white py-2.5 pl-3 pr-11 text-sm text-vault-text outline-none ring-apple-blue/20 transition focus:ring-2"
                 />
                 <button
@@ -878,14 +984,102 @@ export default function App() {
           )}
           {formError ? <p className="mt-4 text-sm text-apple-red">{formError}</p> : null}
           <button
-            type="button"
+            type="submit"
             disabled={busy}
-            onClick={vaultExists ? handleUnlock : handleCreateVault}
             className="mt-8 w-full rounded-xl bg-apple-blue py-3 text-sm font-semibold text-white shadow-md shadow-apple-blue/25 transition hover:bg-[#0066d6] disabled:opacity-50"
           >
             {!vaultExists ? "Create vault" : "Unlock"}
           </button>
+          {vaultExists && supabaseRegistration.configured && unlockRejectedBadPw ? (
+            <button
+              type="button"
+              onClick={() => {
+                setRecoverModalOpen(true);
+                setRecoveryError(null);
+              }}
+              className="mt-5 w-full text-center text-sm font-medium text-apple-blue transition hover:underline"
+            >
+              Forgot password?
+            </button>
+          ) : null}
+          </form>
         </div>
+        {recoverModalOpen ? (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-5">
+            <button
+              type="button"
+              className="absolute inset-0 bg-slate-900/35 backdrop-blur-sm"
+              aria-label="Close reset dialog"
+              onClick={closeRecoveryModal}
+            />
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="reset-pw-title"
+              className="relative z-10 flex w-full max-w-md flex-col gap-3 rounded-[28px] border border-white/55 bg-white/60 p-8 shadow-float backdrop-blur-2xl"
+            >
+              <div
+                id="reset-pw-title"
+                className="text-center text-xl font-semibold tracking-tight text-vault-text"
+              >
+                Reset password
+              </div>
+              <label className="mt-1 block text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
+                Encryption key
+              </label>
+              <input
+                type="text"
+                autoComplete="off"
+                spellCheck={false}
+                value={recoveryKeyPlain}
+                onChange={(e) => setRecoveryKeyPlain(e.target.value)}
+                placeholder="e.g. a1b2c3d4e5f6… (paste full key)"
+                className="w-full rounded-xl border border-black/[0.08] bg-white/90 px-3 py-2.5 font-mono text-xs tracking-wide text-vault-text outline-none ring-apple-blue/20 transition focus:ring-2"
+              />
+              <label className="mt-1 block text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
+                New password
+              </label>
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={recoveryNewPw}
+                onChange={(e) => setRecoveryNewPw(e.target.value)}
+                className="w-full rounded-xl border border-black/[0.08] bg-white/90 px-3 py-2.5 text-sm text-vault-text outline-none ring-apple-blue/20 transition focus:ring-2"
+              />
+              <label className="block text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
+                Confirm new password
+              </label>
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={recoveryConfirmPw}
+                onChange={(e) => setRecoveryConfirmPw(e.target.value)}
+                className="w-full rounded-xl border border-black/[0.08] bg-white/90 px-3 py-2.5 text-sm text-vault-text outline-none ring-apple-blue/20 transition focus:ring-2"
+              />
+              {recoveryError ? (
+                <p className="text-sm text-apple-red">{recoveryError}</p>
+              ) : null}
+              <div className="mt-3 flex gap-3">
+                <button
+                  type="button"
+                  disabled={recoveryBusy}
+                  onClick={closeRecoveryModal}
+                  className="flex-1 rounded-xl border border-black/[0.12] bg-white/80 py-3 text-sm font-semibold text-vault-text shadow-sm transition hover:bg-white disabled:opacity-50"
+                >
+                  Decline
+                </button>
+                <button
+                  type="button"
+                  disabled={recoveryBusy}
+                  onClick={() => void handleRecoveryConfirm()}
+                  className="flex-1 rounded-xl bg-apple-blue py-3 text-sm font-semibold text-white shadow-md shadow-apple-blue/25 transition hover:bg-[#0066d6] disabled:opacity-50"
+                >
+                  {recoveryBusy ? "Working…" : "Confirm"}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
       </WindowShell>
     );

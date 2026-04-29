@@ -325,7 +325,11 @@ function registerIpc() {
         );
       }
     }
-    const r = await vault.createVault(masterPassword);
+    const normalizedRegMail =
+      emailRaw && supabaseSync.isOrgEmail(emailRaw)
+        ? supabaseSync.normalizeMail(emailRaw)
+        : "";
+    const r = await vault.createVault(masterPassword, normalizedRegMail || null);
     scheduleAutoLock();
     let supabaseSynced = false;
     let supabaseError = null;
@@ -384,6 +388,33 @@ function registerIpc() {
   });
 
   ipcMain.handle("vault:is-unlocked", () => session.isUnlocked());
+
+  ipcMain.handle("vault:get-registration-mail", async () => {
+    return vault.getRegistrationMail();
+  });
+
+  ipcMain.handle("vault:reset-from-recovery", async (_e, payload) => {
+    touchActivity();
+    const recoveryKey = typeof payload?.recoveryKey === "string" ? payload.recoveryKey : "";
+    const newPassword = typeof payload?.newPassword === "string" ? payload.newPassword : "";
+    const confirmPassword =
+      typeof payload?.confirmPassword === "string" ? payload.confirmPassword : "";
+    if (!newPassword || newPassword.length < 8) {
+      throw new Error("New password must be at least 8 characters.");
+    }
+    if (newPassword !== confirmPassword) {
+      throw new Error("New password confirmation does not match.");
+    }
+    try {
+      const r = await vault.resetMasterPasswordFromRecovery(recoveryKey, newPassword);
+      failedUnlockAttempts = 0;
+      scheduleAutoLock();
+      return r;
+    } catch (err) {
+      failedUnlockAttempts = (failedUnlockAttempts || 0) + 1;
+      throw err;
+    }
+  });
 
   ipcMain.handle("window:set-main-always-on-top", (_e, flag) => {
 
