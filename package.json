@@ -1,6 +1,6 @@
 {
   "name": "vault-manager",
-  "version": "2.2.3",
+  "version": "2.3.0",
   "description": "Offline-first zero-knowledge password manager (Electron + extension)",
   "main": "app/main.js",
   "author": "",
