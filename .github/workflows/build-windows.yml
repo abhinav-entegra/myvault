@@ -16,7 +16,8 @@ permissions:
 
 jobs:
   windows:
-    runs-on: windows-latest
+    # windows-latest ships only VS 2026, which node-gyp 9 (via @electron/rebuild) cannot detect.
+    runs-on: windows-2022
     timeout-minutes: 60
 
     env:
