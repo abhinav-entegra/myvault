@@ -3,31 +3,76 @@
 <html lang="en">
 
   <head>
+
     <meta charset="UTF-8" />
 
     <meta
+
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*;"
+
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*;"
+
     />
 
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
-
-    <link
-      href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800;900&display=swap"
-      rel="stylesheet"
-    />
+    <meta name="theme-color" content="#0b0e0c" />
 
     <title>Myvault</title>
+
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32' fill='none'%3E%3Cdefs%3E%3ClinearGradient id='mv-logo-grad' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%23fb923c'/%3E%3Cstop offset='50%25' stop-color='%23f97316'/%3E%3Cstop offset='100%25' stop-color='%23ea580c'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='%23121212'/%3E%3Cg transform='translate(4,4) scale(0.75)' fill='url(%23mv-logo-grad)'%3E%3Cpath d='M16 2C16 2 19 8 19 12C19 13.6569 17.6569 15 16 15C14.3431 15 13 13.6569 13 12C13 8 16 2 16 2Z'/%3E%3Cpath d='M16 30C16 30 13 24 13 20C13 18.3431 14.3431 17 16 17C17.6569 17 19 18.3431 19 20C19 24 16 30 16 30Z'/%3E%3Cpath d='M3.87 9C3.87 9 10.5 8.5 13.5 10.5C14.93 11.45 15.25 13.4 14.22 14.7C13.18 16 11.2 16.15 9.77 15.2C6.77 13.2 3.87 9 3.87 9Z'/%3E%3Cpath d='M28.13 23C28.13 23 21.5 23.5 18.5 21.5C17.07 20.55 16.75 18.6 17.78 17.3C18.82 16 20.8 15.85 22.23 16.8C25.23 18.8 28.13 23 28.13 23Z'/%3E%3Cpath d='M3.87 23C3.87 23 6.77 18.8 9.77 16.8C11.2 15.85 13.18 16 14.22 17.3C15.25 18.6 14.93 20.55 13.5 21.5C10.5 23.5 3.87 23 3.87 23Z'/%3E%3Cpath d='M28.13 9C28.13 9 25.23 13.2 22.23 15.2C20.8 16.15 18.82 16 17.78 14.7C16.75 13.4 17.07 11.45 18.5 10.5C21.5 8.5 28.13 9 28.13 9Z'/%3E%3Ccircle cx='16' cy='16' r='3.5' fill='%23ffffff'/%3E%3Ccircle cx='16' cy='16' r='2' fill='%23ea580c'/%3E%3C/g%3E%3C/svg%3E" />
     <link rel="icon" type="image/png" href="./logo-mark.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@600&family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,400&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+
+    <style>
+      html, body { background: #0b0e0c; color: #ede9df; margin: 0; }
+      #boot-fail {
+        display: none; position: fixed; inset: 0; z-index: 999;
+        align-items: center; justify-content: center; padding: 32px;
+        background: #0b0e0c; font-family: system-ui, sans-serif;
+      }
+      #boot-fail .card {
+        max-width: 520px; border: 1px solid rgb(216 178 92 / 0.3);
+        border-radius: 20px; padding: 28px 32px; background: #131714;
+      }
+      #boot-fail h2 { margin: 0 0 8px; font-size: 18px; color: #eac97e; }
+      #boot-fail p { margin: 0; font-size: 13px; line-height: 1.6; color: #a3a89e; word-break: break-word; }
+    </style>
 
   </head>
 
   <body class="bg-vault-bg font-sans text-vault-text antialiased">
 
     <div id="root"></div>
+
+    <div id="boot-fail" role="alert">
+      <div class="card">
+        <h2>Myvault is taking too long to start</h2>
+        <p id="boot-fail-msg">The interface has not loaded. Press Ctrl+Shift+I to open DevTools and read the red Console error, then share it.</p>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        function show(msg) {
+          var el = document.getElementById("boot-fail");
+          var p = document.getElementById("boot-fail-msg");
+          if (p && msg) p.textContent = String(msg).slice(0, 400);
+          if (el) el.style.display = "flex";
+        }
+        window.addEventListener("error", function (e) {
+          show((e && e.message) || "A script failed to load.");
+        });
+        window.addEventListener("unhandledrejection", function (e) {
+          show((e && e.reason && (e.reason.message || e.reason)) || "A startup task failed.");
+        });
+        setTimeout(function () {
+          var r = document.getElementById("root");
+          if (r && !r.firstChild) show(null);
+        }, 12000);
+      })();
+    </script>
 
     <script type="module" src="/src/main.jsx"></script>
 

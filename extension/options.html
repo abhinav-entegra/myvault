@@ -5,7 +5,7 @@
   <head>
     <meta charset="UTF-8" />
 
-    <title>Vault Manager Bridge</title>
+    <title>Myvault Browser Bridge</title>
 
     <meta
       http-equiv="Content-Security-Policy"
@@ -18,10 +18,18 @@
 
   <body>
     <main class="panel">
-      <h1>Vault Manager Bridge</h1>
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M12 3l8 4v6c0 5-3.4 9.4-8 10-4.6-.6-8-5-8-10V7l8-4z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+        </div>
+        <div>
+          <div class="eyebrow">Myvault browser bridge</div>
+          <h1>Bring your vault into your flow.</h1>
+        </div>
+      </div>
 
       <p class="lead">
-        Set the loopback URL and bearer token copied from Vault Manager ▸ Extension.
+        Connect this browser once using the URL and token from Myvault’s Extension screen.
       </p>
 
       <label for="baseUrl">API base URL</label>
@@ -34,7 +42,7 @@
 
       <div class="row">
 
-        <button id="save" type="button">Save</button>
+        <button id="save" type="button">Save connection</button>
 
         <button id="test" type="button" class="secondary">Test connection</button>
 
@@ -43,9 +51,7 @@
       <p id="status" class="status" aria-live="polite"></p>
 
       <p class="hint">
-
-        Autofill fires from the toolbar icon or Alt+Shortcut (adjust in chrome://extensions/shortcuts).
-
+        <strong>Private by design.</strong> Autofill starts from the toolbar icon or your configured shortcut.
       </p>
 
     </main>

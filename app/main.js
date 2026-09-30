@@ -11,11 +11,14 @@ const {
   clipboard,
   Menu,
   Notification,
+  nativeImage,
+  screen,
 } = require("electron");
 
 const { openDatabase } = require("./db");
 const session = require("./session");
 const { startLocalServer, getLocalPort } = require("./server");
+const { typeLoginIntoWindowAt } = require("./native-autofill");
 const vault = require("./vault-logic");
 const supabaseSync = require("./supabase-sync");
 
@@ -82,6 +85,48 @@ function wireWindowSignals(win) {
 }
 
 let mainWindow = null;
+
+const FULL_MIN = { width: 1100, height: 680 };
+/** Height floor lets the mini card collapse to just its control bar. */
+const COMPACT_MIN = { width: 200, height: 48 };
+/** Height fits the controls, search bar and exactly four password cards. */
+const COMPACT_DEFAULT = { width: 310, height: 360 };
+const COMPACT_COLLAPSED_HEIGHT = 48;
+const compactState = {
+  active: false,
+  collapsed: false,
+  expandedMiniHeight: null,
+  fullBounds: null,
+  miniBounds: null,
+  wasMaximized: false,
+};
+
+/**
+ * setBounds(..., animate) is macOS-only, so ease the height manually. The top edge stays put
+ * unless growing would run past the bottom of the screen, in which case the bottom edge stays put.
+ */
+function animateWindowHeight(win, to, durationMs) {
+  return new Promise((resolve) => {
+    const start = win.getBounds();
+    const from = start.height;
+    const wa = screen.getDisplayMatching(start).workArea;
+    const anchorBottom = to > from && start.y + to > wa.y + wa.height;
+    const bottom = start.y + from;
+    const t0 = Date.now();
+    const tick = () => {
+      if (win.isDestroyed()) return resolve();
+      const p = Math.min(1, (Date.now() - t0) / durationMs);
+      const eased = 1 - (1 - p) ** 3;
+      const b = win.getBounds();
+      const height = Math.round(from + (to - from) * eased);
+      const y = anchorBottom ? Math.max(wa.y, bottom - height) : b.y;
+      win.setBounds({ x: b.x, y, width: b.width, height });
+      if (p < 1) setTimeout(tick, 12);
+      else resolve();
+    };
+    tick();
+  });
+}
 
 let floatNoteWin = null;
 
@@ -214,13 +259,13 @@ function createWindow() {
   const icon = resolveAppIcon();
 
   const win = new BrowserWindow({
-    width: 1040,
+    width: 1440,
 
-    height: 760,
+    height: 900,
 
-    minWidth: 800,
+    minWidth: 1100,
 
-    minHeight: 560,
+    minHeight: 680,
 
     show: false,
 
@@ -245,7 +290,22 @@ function createWindow() {
 
   wireWindowSignals(win);
 
-  win.once("ready-to-show", () => win.show());
+  if (icon) {
+    try {
+      win.setIcon(nativeImage.createFromPath(icon));
+    } catch {
+      //
+    }
+  }
+
+  win.once("ready-to-show", () => {
+    win.show();
+    try {
+      win.maximize();
+    } catch {
+      //
+    }
+  });
 
   const useViteDev =
     !app.isPackaged && process.env.NODE_ENV === "development";
@@ -253,7 +313,9 @@ function createWindow() {
   if (useViteDev) {
     win.loadURL("http://127.0.0.1:5173");
 
-    win.webContents.openDevTools({ mode: "detach" });
+    if (process.env.MYVAULT_DEVTOOLS === "1") {
+      win.webContents.openDevTools({ mode: "detach" });
+    }
 
   } else {
 
@@ -486,6 +548,79 @@ function registerIpc() {
 
   });
 
+  ipcMain.handle("autofill:after-drop", async (_e, payload) => {
+    if (!session.isUnlocked() || !mainWindow || mainWindow.isDestroyed()) return { ok: false };
+    const username = String(payload?.username ?? "");
+    const password = String(payload?.password ?? "");
+    if (!username || !password) return { ok: false };
+    const pt = screen.getCursorScreenPoint();
+    const b = mainWindow.getBounds();
+    const insideApp = pt.x >= b.x && pt.x < b.x + b.width && pt.y >= b.y && pt.y < b.y + b.height;
+    if (insideApp) return { ok: false, reason: "dropped-inside-app" };
+    touchActivity();
+    const phys = screen.dipToScreenPoint(pt);
+    return typeLoginIntoWindowAt(phys, username, password);
+  });
+
+  ipcMain.handle("window:set-compact", (_e, flag) => {
+    const win = mainWindow;
+    if (!win || win.isDestroyed()) return { ok: false };
+    const want = flag === true;
+    if (want === compactState.active) return { ok: true, compact: want };
+    try {
+      if (want) {
+        compactState.wasMaximized = win.isMaximized();
+        if (compactState.wasMaximized) win.unmaximize();
+        compactState.fullBounds = win.getBounds();
+        win.setMinimumSize(COMPACT_MIN.width, COMPACT_MIN.height);
+        const b = compactState.miniBounds;
+        if (b) {
+          win.setBounds(b);
+        } else {
+          const full = compactState.fullBounds;
+          win.setBounds({
+            width: COMPACT_DEFAULT.width,
+            height: COMPACT_DEFAULT.height,
+            x: full.x + full.width - COMPACT_DEFAULT.width - 24,
+            y: full.y + 48,
+          });
+        }
+      } else {
+        const b = win.getBounds();
+        compactState.miniBounds =
+          compactState.collapsed && compactState.expandedMiniHeight
+            ? { ...b, height: compactState.expandedMiniHeight }
+            : b;
+        compactState.collapsed = false;
+        win.setAlwaysOnTop(false);
+        win.setMinimumSize(FULL_MIN.width, FULL_MIN.height);
+        if (compactState.fullBounds) win.setBounds(compactState.fullBounds);
+        if (compactState.wasMaximized) win.maximize();
+      }
+      compactState.active = want;
+      return { ok: true, compact: want };
+    } catch (err) {
+      return { ok: false, error: String(err?.message || err) };
+    }
+  });
+
+  ipcMain.handle("window:mini-collapse", async (_e, flag) => {
+    const win = mainWindow;
+    if (!win || win.isDestroyed() || !compactState.active) return { ok: false };
+    const want = flag === true;
+    if (want === compactState.collapsed) return { ok: true, collapsed: want };
+    if (want) {
+      compactState.expandedMiniHeight = win.getBounds().height;
+      win.setAlwaysOnTop(true);
+      compactState.collapsed = true;
+      await animateWindowHeight(win, COMPACT_COLLAPSED_HEIGHT, 200);
+    } else {
+      compactState.collapsed = false;
+      await animateWindowHeight(win, compactState.expandedMiniHeight || COMPACT_DEFAULT.height, 220);
+    }
+    return { ok: true, collapsed: want };
+  });
+
   ipcMain.handle("notes:open-float-window", (_e, noteId) => {
     touchActivity();
 
@@ -541,6 +676,15 @@ function registerIpc() {
       });
 
       wireWindowSignals(floatNoteWin);
+
+      const fIcon = resolveAppIcon();
+      if (fIcon) {
+        try {
+          floatNoteWin.setIcon(nativeImage.createFromPath(fIcon));
+        } catch {
+          //
+        }
+      }
 
       floatNoteWin.once("ready-to-show", () => floatNoteWin.show());
 

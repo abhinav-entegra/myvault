@@ -2,78 +2,525 @@
 @tailwind components;
 @tailwind utilities;
 
-html,
-body,
-#root {
+/* ---------------------------------------------------------------------------
+   MYVAULT — Immersive UI/UX System
+   Feeling: Warm, tactile, security, zero-knowledge vault
+   Base Hue: 24 (Vivid Warm Orange) | Amber: 38 | Success Green: 152
+--------------------------------------------------------------------------- */
+:root {
+  --h: 24;                                       /* Warm orange accent */
+  --h-warm: 38;                                  /* Amber gold */
+  --h-calm: 152;                                 /* Secondary freshness / success green */
+
+  --bg: #ffffff;
+  --bg-sunken: #f4f4f5;
+  --surface: #ffffff;
+  --surface-elevated: #ffffff;
+  --surface-hover: #fcfcfc;
+  
+  --glass: rgba(255, 255, 255, 0.82);
+  --glass-strong: rgba(255, 255, 255, 0.94);
+  --glass-border: rgba(228, 228, 231, 0.85);
+
+  --ink: #18181b;
+  --ink-secondary: #3f3f46;
+  --muted: #71717a;
+  --muted-light: #a1a1aa;
+  --line: #e4e4e7;
+  --line-strong: #d4d4d8;
+
+  --accent: #f97316;
+  --accent-deep: #ea580c;
+  --accent-soft: rgba(249, 115, 22, 0.10);
+  --accent-fg: #ffffff;
+
+  --warm: #f59e0b;
+  --warm-soft: rgba(245, 158, 11, 0.12);
+
+  --success: hsl(152 65% 38%);
+  --success-soft: hsl(152 65% 38% / 0.12);
+  --danger: hsl(356 75% 54%);
+  --danger-soft: hsl(356 75% 54% / 0.12);
+
+  --step--1: clamp(0.83rem, 0.8rem + 0.15vw, 0.94rem);
+  --step-0: clamp(1rem, 0.96rem + 0.2vw, 1.125rem);
+  --step-1: clamp(1.25rem, 1.15rem + 0.5vw, 1.5rem);
+  --step-2: clamp(1.56rem, 1.35rem + 1vw, 2.1rem);
+  --step-3: clamp(1.95rem, 1.55rem + 2vw, 3rem);
+  --step-4: clamp(2.44rem, 1.7rem + 3.7vw, 4.5rem);
+
+  --radius-sm: 12px;
+  --radius: 20px;
+  --radius-lg: 28px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.04);
+  --shadow-card: 0 4px 18px -4px rgba(0, 0, 0, 0.05), 0 0 0 1px rgba(228, 228, 231, 0.8);
+  --shadow-lift: 0 16px 36px -12px rgba(249, 115, 22, 0.10), 0 0 0 1px rgba(228, 228, 231, 0.9);
+  --shadow-modal: 0 32px 80px -18px rgba(0, 0, 0, 0.22), 0 0 0 1px rgba(255, 255, 255, 0.9);
+  --shadow-accent: 0 10px 28px -8px rgba(249, 115, 22, 0.38);
+  --shadow-warm: 0 10px 28px -8px rgba(245, 158, 11, 0.38);
+
+  --ease: cubic-bezier(0.25, 0.8, 0.25, 1);
+  --dur-1: 120ms;
+  --dur-2: 220ms;
+  --dur-3: 350ms;
+  --dur-4: 600ms;
+
+  color-scheme: light;
+}
+
+html, body, #root {
   height: 100%;
 }
 
 body {
   margin: 0;
+  background-color: #ffffff;
+  background-image:
+    radial-gradient(ellipse 65% 50% at 100% 100%, rgba(249, 115, 22, 0.07), transparent 60%);
+  color: var(--ink);
+  font-family: "Instrument Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-feature-settings: "ss01", "tnum" 0;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
-@layer utilities {
-  .glass-panel {
-    @apply border border-white/40 bg-white/70 shadow-glass backdrop-blur-vault;
-    box-shadow:
-      0 8px 32px rgba(0, 0, 0, 0.08),
-      inset 0 1px 0 rgba(255, 255, 255, 0.7);
-  }
+.font-display, h1, h2 {
+  font-family: "Fraunces", Georgia, serif;
+}
 
-  .glass-modal {
-    @apply border border-black/10 bg-white/[0.82] backdrop-blur-vault;
-    box-shadow:
-      0 24px 80px rgba(0, 0, 0, 0.12),
-      0 8px 24px rgba(0, 0, 0, 0.08),
-      inset 0 1px 0 rgba(255, 255, 255, 0.85);
-  }
+.font-mono {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
 
-  .glass-rail {
-    @apply border border-black/[0.06] bg-white/[0.55] backdrop-blur-vault;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06);
-  }
+.font-hand {
+  font-family: "Caveat", cursive;
+}
 
-  .text-quiet {
-    @apply text-vault-muted;
+::selection {
+  background: hsl(var(--h) 85% 55% / 0.25);
+  color: var(--ink);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+/* Scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--h) 25% 75% / 0.6) transparent;
+}
+*::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+*::-webkit-scrollbar-thumb {
+  background: hsl(var(--h) 25% 75% / 0.6);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--h) 35% 60% / 0.8);
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Skip link */
+.skip-link {
+  position: fixed;
+  top: -60px;
+  left: 16px;
+  z-index: 200;
+  background: var(--accent);
+  color: #ffffff;
+  padding: 10px 18px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: var(--shadow-accent);
+  transition: top var(--dur-2) var(--ease);
+}
+.skip-link:focus {
+  top: 12px;
+}
+
+/* ---------------------------------------------------------------------------
+   Signature Pattern: Aurora Background
+   (reference.md: 2 to 3 blurred slowly drifting color blobs)
+--------------------------------------------------------------------------- */
+.aurora {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.aurora span {
+  position: absolute;
+  filter: blur(100px);
+  pointer-events: none;
+}
+.aurora span:nth-child(1) {
+  bottom: -15%;
+  right: -10%;
+  width: 50vmax;
+  height: 50vmax;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(249, 115, 22, 0.08) 0%, rgba(254, 215, 170, 0.04) 50%, transparent 70%);
+  opacity: 0.65;
+}
+.aurora span:nth-child(2),
+.aurora span:nth-child(3) {
+  display: none;
+}
+
+@keyframes aurora-drift {
+  to {
+    transform: translate3d(6vw, -4vh, 0) scale(1.12);
   }
 }
 
-input::placeholder,
-textarea::placeholder {
-  color: rgba(110, 110, 115, 0.85);
+/* Feathered section atmosphere */
+.grain::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
 }
 
-/* Smooth scrolling for category rail */
-.overflow-y-overlay {
-  scrollbar-gutter: stable;
+/* ---------------------------------------------------------------------------
+   Signature Pattern: Glass Cards & Panels
+--------------------------------------------------------------------------- */
+.glass-panel {
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(20px) saturate(1.4);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.72));
+  box-shadow: var(--shadow-card);
 }
 
-@keyframes vault-header-in {
+.glass-modal {
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(28px) saturate(1.5);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.85));
+  box-shadow: var(--shadow-modal);
+}
+
+.glass-rail {
+  border: 1px solid var(--line);
+  backdrop-filter: blur(24px) saturate(1.4);
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: var(--shadow-card);
+}
+
+.vault-board {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.78));
+  box-shadow: var(--shadow-card);
+}
+
+/* Subtle texture on rails */
+.vault-texture {
+  background-image:
+    radial-gradient(hsl(var(--h) 40% 60% / 0.06) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
+.bg-dots {
+  background-image: radial-gradient(rgba(148, 163, 184, 0.32) 1.2px, transparent 1.2px);
+  background-size: 14px 14px;
+}
+
+/* Auth Medallion Frame */
+.vault-orbit {
+  position: relative;
+  display: grid;
+  aspect-ratio: 1;
+  width: min(280px, 75%);
+  place-items: center;
+  border: 1px solid hsl(var(--h) 80% 50% / 0.25);
+  border-radius: 40%;
+  background: radial-gradient(circle at 35% 30%, hsl(var(--h) 80% 90% / 0.6), transparent 50%), #ffffff;
+  box-shadow: 0 25px 60px -20px hsl(var(--h) 45% 20% / 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+.vault-orbit::before, .vault-orbit::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+}
+.vault-orbit::before {
+  inset: 10%;
+  border: 1px dashed hsl(var(--h) 70% 60% / 0.35);
+}
+.vault-orbit::after {
+  inset: 24%;
+  border: 1px solid hsl(var(--h-warm) 85% 65% / 0.3);
+}
+
+/* ---------------------------------------------------------------------------
+   Interactive Elements: Buttons & Inputs
+--------------------------------------------------------------------------- */
+.btn-brass, .btn-primary {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background: #121212;
+  color: #ffffff !important;
+  font-weight: 600;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 12px;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  transition: transform var(--dur-2) var(--ease), box-shadow var(--dur-2) var(--ease), background var(--dur-2) var(--ease);
+}
+.btn-brass:hover, .btn-primary:hover {
+  background: #000000;
+  color: #ffffff !important;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+}
+.btn-brass:active, .btn-primary:active {
+  transform: translateY(0) scale(0.98);
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #1e293b;
+  font-weight: 600;
+  border-radius: 12px;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: all var(--dur-2) var(--ease);
+}
+.btn-secondary:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  color: #0f172a;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
+}
+.btn-secondary:active {
+  transform: translateY(0) scale(0.98);
+}
+
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border: 1px solid hsl(356 75% 54% / 0.3);
+  background: hsl(356 75% 54% / 0.08);
+  color: hsl(356 75% 48%);
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--dur-2) var(--ease);
+}
+.btn-danger:hover {
+  background: hsl(356 75% 54%);
+  color: #ffffff;
+  border-color: hsl(356 75% 54%);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px -6px hsl(356 75% 54% / 0.45);
+}
+.btn-danger:active {
+  transform: translateY(0) scale(0.98);
+}
+
+/* Card hover lift per SKILL.md */
+.card-lift {
+  transition: transform 0.28s var(--ease), box-shadow 0.28s var(--ease), border-color 0.22s var(--ease);
+}
+.card-lift:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-lift);
+  border-color: hsl(var(--h) 70% 60% / 0.45);
+}
+.card-lift:active {
+  transform: translateY(-1px) scale(0.995);
+}
+
+/* Luminous focus beam ring on primary action */
+.beam-ring {
+  position: relative;
+}
+.beam-ring::before {
+  display: none;
+}
+@property --beam {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes beam-spin {
+  to {
+    --beam: 360deg;
+  }
+}
+
+/* Form Controls */
+.vault-input {
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background-color: rgba(255, 255, 255, 0.9);
+  color: var(--ink);
+  font-size: 14px;
+  padding: 10px 14px;
+  outline: none;
+  backdrop-filter: blur(8px);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.03);
+  transition: all var(--dur-2) var(--ease);
+}
+.vault-input::placeholder {
+  color: var(--muted);
+  opacity: 0.75;
+}
+.vault-input:focus {
+  border-color: var(--accent);
+  background-color: #ffffff;
+  box-shadow: 0 0 0 3px var(--accent-soft), inset 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+select.vault-input {
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23ea580c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  padding-right: 38px;
+}
+
+/* Ruled note paper palette */
+.note-tint-0 { background-color: hsl(42 65% 97.5%); }
+.note-tint-1 { background-color: hsl(155 50% 97.5%); }
+.note-tint-2 { background-color: hsl(24 60% 97.5%); }
+.note-tint-3 { background-color: hsl(280 45% 98%); }
+
+.hand-note {
+  font-family: "Caveat", cursive;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+/* Motion and reveals */
+@keyframes vault-rise {
   from {
     opacity: 0;
-    transform: translateY(-6px);
+    transform: translateY(16px);
+    filter: blur(8px);
   }
   to {
     opacity: 1;
     transform: translateY(0);
+    filter: blur(0);
   }
 }
-
-@keyframes vault-panel-fade {
+@keyframes vault-header-in {
   from {
     opacity: 0;
+    transform: translateY(-8px);
+    filter: blur(6px);
   }
   to {
     opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+@keyframes vault-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 12px);
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+    filter: blur(0);
+  }
+}
+@keyframes vault-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.985);
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+@keyframes vault-word-in {
+  from {
+    opacity: 0;
+    transform: translateY(110%);
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
   }
 }
 
-@layer utilities {
-  .animate-vault-header {
-    animation: vault-header-in 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
-  }
+.animate-vault-header { animation: vault-header-in 0.6s var(--ease) both; }
+.animate-vault-toast { animation: vault-toast-in 0.3s var(--ease) both; }
+.animate-vault-modal { animation: vault-modal-in 0.32s var(--ease) both; }
+.reveal-card { animation: vault-rise 0.7s var(--ease) both; animation-delay: calc(min(var(--i, 0), 10) * 65ms); }
+.animate-vault-grid { animation: vault-rise 0.55s var(--ease) both; }
 
-  .animate-vault-grid {
-    animation: vault-panel-fade 0.4s ease-out both;
+.word-reveal .w {
+  display: inline-block;
+  opacity: 0;
+  transform: translateY(110%);
+  filter: blur(6px);
+  animation: vault-word-in 0.85s var(--ease) forwards;
+  animation-delay: calc(var(--i, 0) * 90ms + 100ms);
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .aurora span {
+    animation: none;
+  }
+  .word-reveal .w {
+    opacity: 1;
+    transform: none;
+    filter: none;
+    animation: none;
+  }
+  .reveal-card, .animate-vault-grid, .animate-vault-header, .animate-vault-modal {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+    filter: none !important;
+  }
+  .beam-ring::before {
+    animation: none;
+    opacity: 0;
   }
 }

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
+import { Magnetic, SplitReveal, Spotlight, useLenis } from "./motion.jsx";
+import authArtSanctuary from "./anime-vault-sanctuary.jpg";
+import dashBannerArt from "./anime-dashboard-banner.jpg";
 
 const api = typeof window !== "undefined" ? window.vaultApi : undefined;
-
-/** Sidebar + tab: `renderer/public/logo-mark.png` (sync to `app/icon.png` via npm run sync-brand-icon). */
-const BRAND_LOGO_SRC = `${import.meta.env.BASE_URL}logo-mark.png`;
 
 function maskToken(t) {
   if (!t || typeof t !== "string") return "—";
@@ -13,17 +14,74 @@ function maskToken(t) {
 function hostFromUrl(u) {
   if (!u || typeof u !== "string") return "";
   try {
-    const h = new URL(u.includes("://") ? u : `https://${u}`).hostname;
-    return h.replace(/^www\./i, "");
+    const raw = u.trim();
+    const hasProto = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw);
+    const parsed = new URL(hasProto ? raw : `https://${raw}`);
+    const host = parsed.hostname.replace(/^www\./i, "");
+    return decodeURIComponent(host);
   } catch {
-    return "";
+    try {
+      return decodeURIComponent(u.trim().replace(/^www\./i, ""));
+    } catch {
+      return u.trim();
+    }
   }
+}
+
+function formatDisplayName(entry) {
+  if (!entry) return "Untitled login";
+  if (entry.title && entry.title.trim()) {
+    try {
+      return decodeURIComponent(entry.title.trim());
+    } catch {
+      return entry.title.trim();
+    }
+  }
+  if (entry.url && entry.url.trim()) {
+    try {
+      const u = entry.url.trim();
+      const host = hostFromUrl(u);
+      if (host) return decodeURIComponent(host);
+      return decodeURIComponent(u);
+    } catch {
+      return entry.url.trim();
+    }
+  }
+  return "Untitled login";
 }
 
 function truncateNote(s, maxLen) {
   const t = (s || "").trim();
   if (!t) return "";
   return t.length > maxLen ? `${t.slice(0, maxLen)}…` : t;
+}
+
+function formatRelativeTime(ts) {
+  if (!ts) return "Recently";
+  const diffSec = Math.floor((Date.now() - Number(ts)) / 1000);
+  if (diffSec < 60) return "Just now";
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffH = Math.floor(diffMin / 60);
+  if (diffH < 24) return `${diffH}h ago`;
+  const diffDays = Math.floor(diffH / 24);
+  if (diffDays < 30) return `${diffDays}d ago`;
+  return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function formatUserNameFromEmail(email) {
+  if (!email || typeof email !== "string") return "Personal";
+  const raw = email.split("@")[0].trim();
+  if (!raw) return "Personal";
+  if (raw.toLowerCase() === "abhinavsilwal") return "Abhinav Silwal";
+  if (/[._-]/.test(raw)) {
+    return raw
+      .split(/[._-]+/)
+      .filter(Boolean)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+      .join(" ");
+  }
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
 }
 
 /** Labels electron-updater ISO release timestamps from feed / IPC. */
@@ -64,10 +122,10 @@ const NOTE_CARD_LINE_PX = 20;
 /** Frequent autosave (~20 keystrokes/sec still batches); Ctrl/Cmd+S always flushes */
 const NOTE_AUTOSAVE_MS = 48;
 const NOTE_PALETTE = [
-  { tint: "#fffdf8", line: "rgba(15, 23, 42, 0.07)" },
-  { tint: "#f4fcf7", line: "rgba(15, 23, 42, 0.06)" },
-  { tint: "#f5f8ff", line: "rgba(15, 23, 42, 0.07)" },
-  { tint: "#faf8ff", line: "rgba(15, 23, 42, 0.06)" },
+  { tint: "#141a16", line: "rgba(216, 178, 92, 0.10)" },
+  { tint: "#12181f", line: "rgba(127, 168, 201, 0.12)" },
+  { tint: "#1a1420", line: "rgba(216, 178, 92, 0.10)" },
+  { tint: "#1d1712", line: "rgba(201, 138, 94, 0.12)" },
 ];
 
 function noteCardSurfaceStyle(colorIdx) {
@@ -90,6 +148,32 @@ function parseNoteFloatId() {
   } catch {
     return null;
   }
+}
+
+/** Aurora: three blurred, slowly drifting colour blobs behind the app. */
+function Aurora() {
+  return (
+    <div className="aurora" aria-hidden="true">
+      <span />
+      <span />
+      <span />
+    </div>
+  );
+}
+
+/** Word-by-word headline: words fade up from blur with a staggered delay. */
+function WordReveal({ text, className = "" }) {
+  const words = String(text).split(" ");
+  return (
+    <span className={`word-reveal ${className}`} aria-label={text}>
+      {words.map((w, i) => (
+        <span key={`${i}-${w}`} className="w" style={{ "--i": i }} aria-hidden="true">
+          {w}
+          {i < words.length - 1 ? " " : ""}
+        </span>
+      ))}
+    </span>
+  );
 }
 
 /** macOS/Win11-style window controls — 12×12, rounded stroke caps */
@@ -183,18 +267,19 @@ function ChromeTitleBar({ subtitle, title = "Myvault" }) {
   if (!can) return null;
 
   return (
-    <header className="flex h-11 shrink-0 items-stretch bg-gradient-to-br from-[#f5f5f7] via-white to-[#eef3ff]">
+    <header className="relative z-30 flex h-11 shrink-0 items-stretch">
       <div
-        className="flex min-w-0 flex-1 items-center px-3 py-1"
+        className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1"
         style={{ WebkitAppRegion: "drag" }}
         onDoubleClick={() => void api.winToggleMaximize?.()}
       >
+        <LogoMark className="h-4 w-4 shrink-0" />
         <div className="min-w-0">
-          <div className="truncate text-[13px] font-semibold leading-tight tracking-tight text-vault-text">
+          <div className="truncate text-[13px] font-semibold leading-tight tracking-tight text-slate-800">
             {title}
           </div>
           {subtitle ? (
-            <div className="truncate text-[11px] leading-tight text-vault-muted">{subtitle}</div>
+            <div className="truncate text-[11px] leading-tight text-slate-400">{subtitle}</div>
           ) : null}
         </div>
       </div>
@@ -207,7 +292,7 @@ function ChromeTitleBar({ subtitle, title = "Myvault" }) {
           title="Minimize"
           aria-label="Minimize"
           onClick={() => void api.winMinimize?.()}
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[#5c5c60] transition-colors hover:bg-black/[0.06] hover:text-vault-text active:scale-[0.96]"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-slate-500 transition-all duration-200 ease-vault hover:bg-black/[0.06] hover:text-slate-900 active:scale-[0.94]"
         >
           <IconTitleMinimize />
         </button>
@@ -216,7 +301,7 @@ function ChromeTitleBar({ subtitle, title = "Myvault" }) {
           title={maximized ? "Restore" : "Maximize"}
           aria-label={maximized ? "Restore" : "Maximize"}
           onClick={() => void api.winToggleMaximize?.()}
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[#5c5c60] transition-colors hover:bg-black/[0.06] hover:text-vault-text active:scale-[0.96]"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-slate-500 transition-all duration-200 ease-vault hover:bg-black/[0.06] hover:text-slate-900 active:scale-[0.94]"
         >
           {maximized ? <IconTitleRestore /> : <IconTitleMaximize />}
         </button>
@@ -225,7 +310,7 @@ function ChromeTitleBar({ subtitle, title = "Myvault" }) {
           title="Close"
           aria-label="Close"
           onClick={() => void api.winClose?.()}
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[#5c5c60] transition-colors hover:bg-[#e03636] hover:text-white active:scale-[0.96]"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-vault-muted transition-all duration-200 ease-vault hover:bg-vault-danger hover:text-white active:scale-[0.94]"
         >
           <IconTitleClose />
         </button>
@@ -237,7 +322,10 @@ function ChromeTitleBar({ subtitle, title = "Myvault" }) {
 function WindowShell({ children, subtitle, title }) {
   const show = typeof api?.winMinimize === "function";
   return (
-    <div className="flex h-screen flex-col overflow-hidden">
+    <div className="grain flex h-screen flex-col overflow-hidden">
+      <a href="#vault-content" className="skip-link">
+        Skip to vault content
+      </a>
       {show ? <ChromeTitleBar subtitle={subtitle} title={title} /> : null}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
     </div>
@@ -249,38 +337,38 @@ function GlassUpdaterAvailableModal({ version, releaseName, releaseDateLabel, on
     <div className="fixed inset-0 z-[75] flex items-center justify-center p-5 sm:p-8">
       <button
         type="button"
-        className="absolute inset-0 bg-black/40 backdrop-blur-md"
+        className="absolute inset-0 bg-black/60 backdrop-blur-md"
         aria-label="Dismiss update dialog"
         onClick={onDecline}
       />
       <div
         role="dialog"
         aria-modal="true"
-        className="relative z-10 w-full max-w-[420px] rounded-[22px] border border-white/35 bg-white/[0.72] p-8 shadow-[0_32px_120px_rgba(0,0,0,0.18)] backdrop-blur-xl"
+        className="glass-modal animate-vault-modal relative z-10 w-full max-w-[420px] rounded-[28px] p-8"
       >
-        <div className="text-[11px] font-semibold uppercase tracking-wide text-vault-muted">New release</div>
-        <h2 className="mt-2 text-lg font-semibold tracking-tight text-vault-text">Update available</h2>
+        <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-vault-accentDeep">New release</div>
+        <h2 className="font-display mt-2 text-2xl font-semibold tracking-tight text-vault-text">A fresher Myvault is here</h2>
         <p className="mt-4 text-sm leading-relaxed text-vault-muted">
-          <span className="font-medium text-vault-text">{version}</span>
+          <span className="font-semibold text-vault-text">{version}</span>
           {releaseName ? <> · {releaseName}</> : null}
         </p>
         {releaseDateLabel ? (
-          <p className="mt-3 text-[12px] text-vault-muted">Published {releaseDateLabel}</p>
+          <p className="mt-2 text-[12px] text-vault-muted">Published {releaseDateLabel}</p>
         ) : null}
         <div className="mt-8 flex flex-wrap justify-end gap-3">
           <button
             type="button"
-            className="rounded-xl px-5 py-2.5 text-sm font-medium text-vault-muted transition hover:bg-black/[0.05]"
+            className="rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-5 py-2.5 text-sm font-medium text-slate-700 transition"
             onClick={onDecline}
           >
-            Decline
+            Not now
           </button>
           <button
             type="button"
-            className="rounded-xl bg-apple-blue px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-apple-blue/20 transition hover:bg-[#0066d6]"
+            className="rounded-xl bg-[#121212] hover:bg-black px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition active:scale-[0.98]"
             onClick={onUpdate}
           >
-            Update
+            Update Myvault
           </button>
         </div>
       </div>
@@ -293,32 +381,32 @@ function GlassUpdaterReadyModal({ version, onRestart, onLater }) {
     <div className="fixed inset-0 z-[75] flex items-center justify-center p-5 sm:p-8">
       <button
         type="button"
-        className="absolute inset-0 bg-black/40 backdrop-blur-md"
+        className="absolute inset-0 bg-black/60 backdrop-blur-md"
         aria-label="Dismiss"
         onClick={onLater}
       />
       <div
         role="dialog"
         aria-modal="true"
-        className="relative z-10 w-full max-w-[420px] rounded-[22px] border border-white/35 bg-white/[0.72] p-8 shadow-[0_32px_120px_rgba(0,0,0,0.18)] backdrop-blur-xl"
+        className="glass-modal animate-vault-modal relative z-10 w-full max-w-[420px] rounded-[28px] p-8"
       >
-        <div className="text-[11px] font-semibold uppercase tracking-wide text-vault-muted">Ready</div>
-        <h2 className="mt-2 text-lg font-semibold tracking-tight text-vault-text">Restart to finish</h2>
-        <p className="mt-4 text-sm leading-relaxed text-vault-muted">
-          Version <span className="font-medium text-vault-text">{version}</span> is downloaded.
-          Restart the app to switch to this version now.
+        <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Update ready</div>
+        <h2 className="font-display mt-2 text-2xl font-semibold tracking-tight text-slate-900">Restart to finish</h2>
+        <p className="mt-4 text-sm leading-relaxed text-slate-600">
+          Version <span className="font-semibold text-slate-900">{version}</span> is downloaded and verified.
+          One quick restart switches you to the fresh version.
         </p>
         <div className="mt-8 flex flex-wrap justify-end gap-3">
           <button
             type="button"
-            className="rounded-xl px-5 py-2.5 text-sm font-medium text-vault-muted transition hover:bg-black/[0.05]"
+            className="rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-5 py-2.5 text-sm font-medium text-slate-700 transition"
             onClick={onLater}
           >
             Later
           </button>
           <button
             type="button"
-            className="rounded-xl bg-apple-blue px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-apple-blue/20 transition hover:bg-[#0066d6]"
+            className="rounded-xl bg-[#121212] hover:bg-black px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition active:scale-[0.98]"
             onClick={onRestart}
           >
             Restart now
@@ -344,8 +432,10 @@ export default function App() {
   const [showUnlockPw, setShowUnlockPw] = useState(false);
   const [showCreateMp, setShowCreateMp] = useState(false);
   const [showConfirmMpVis, setShowConfirmMpVis] = useState(false);
+  const [capsLockOn, setCapsLockOn] = useState(false);
   const [formError, setFormError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [authModeOverride, setAuthModeOverride] = useState(null); // 'unlock' | 'create' | null
   const [unlockRejectedBadPw, setUnlockRejectedBadPw] = useState(false);
   const [recoverModalOpen, setRecoverModalOpen] = useState(false);
   const [recoveryKeyPlain, setRecoveryKeyPlain] = useState("");
@@ -388,6 +478,9 @@ export default function App() {
   const [updaterChecking, setUpdaterChecking] = useState(false);
   const [updaterModal, setUpdaterModal] = useState(null);
   const [updaterDlBusy, setUpdaterDlBusy] = useState(false);
+  const [compactMode, setCompactModeState] = useState(false);
+  const [miniCollapsed, setMiniCollapsed] = useState(false);
+  useLenis(true);
 
   const setPinnedAndSync = useCallback((v) => {
     const next = !!v;
@@ -395,6 +488,25 @@ export default function App() {
     if (typeof api?.setMainAlwaysOnTop === "function") {
       void api.setMainAlwaysOnTop(next);
     }
+  }, []);
+
+  const setCompact = useCallback(async (v) => {
+    const next = !!v;
+    if (typeof api?.setCompactMode === "function") {
+      const r = await api.setCompactMode(next);
+      if (r && r.ok === false) return;
+    }
+    if (!next) setVaultPinnedFront(false);
+    setMiniCollapsed(false);
+    setCompactModeState(next);
+  }, []);
+
+  // Collapsing keeps the bar on screen and pinned above other apps.
+  const collapseMini = useCallback(async (v) => {
+    const next = !!v;
+    setMiniCollapsed(next);
+    if (next) setVaultPinnedFront(true);
+    await api.setMiniCollapsed?.(next);
   }, []);
 
   const showToast = useCallback((msg) => {
@@ -689,6 +801,14 @@ export default function App() {
             //
           }
         }
+        if (typeof api.getRegistrationMail === "function") {
+          try {
+            const rm = await api.getRegistrationMail();
+            if (rm) setAccountEmail(rm);
+          } catch {
+            //
+          }
+        }
         if (
           noteFloatBootId !== null &&
           typeof api.vaultIsUnlocked === "function" &&
@@ -742,20 +862,20 @@ export default function App() {
   }, [unlocked, refreshCategories, refreshList, refreshNoteFolders, refreshNotes]);
 
   const headerTitle = useMemo(() => {
-    if (pane === "extension") return "Extension";
+    if (pane === "extension") return "Browser bridge";
     if (pane === "notes") {
       if (noteFolderFilter != null) {
         const f = noteFolders.find((x) => x.id === noteFolderFilter);
-        return f ? f.name : "Notes";
+        return f ? f.name : "Private notes";
       }
-      return "Notes";
+      return "Private notes";
     }
-    if (pane === "favorites") return "Favorites";
+    if (pane === "favorites") return "Starred items";
     if (categoryFilter != null) {
       const c = categories.find((x) => x.id === categoryFilter);
       return c ? c.name : "Category";
     }
-    return "All items";
+    return "Login library";
   }, [pane, categoryFilter, categories, noteFolderFilter, noteFolders]);
 
   const notesFiltered = useMemo(() => {
@@ -872,6 +992,14 @@ export default function App() {
       setMp("");
       setUnlockRejectedBadPw(false);
       setUnlocked(true);
+      if (typeof api.getRegistrationMail === "function") {
+        try {
+          const rm = await api.getRegistrationMail();
+          if (rm) setAccountEmail(rm);
+        } catch {
+          //
+        }
+      }
       setCategoryFilter(null);
       setPane("items");
     } catch (e) {
@@ -920,7 +1048,7 @@ export default function App() {
       const res = await api.createVault({ masterPassword: mp, email: mail });
       setMp("");
       setConfirmMp("");
-      setAccountEmail("");
+      if (mail) setAccountEmail(mail);
       setVaultExists(true);
       setUnlocked(true);
       setCategoryFilter(null);
@@ -952,6 +1080,7 @@ export default function App() {
     if (typeof api?.setMainAlwaysOnTop === "function") {
       void api.setMainAlwaysOnTop(false);
     }
+    if (compactMode) void setCompact(false);
     setDetailCred(null);
     setCredModal(null);
     setRevealedPw(false);
@@ -1094,7 +1223,7 @@ export default function App() {
 
   if (!api) {
     return (
-      <div className="flex h-screen items-center justify-center p-8 text-g-red">
+      <div className="flex h-screen items-center justify-center bg-vault-bg p-8 font-sans text-vault-danger">
         Run inside Electron with preload.
       </div>
     );
@@ -1103,8 +1232,12 @@ export default function App() {
   if (checking) {
     return (
       <WindowShell>
-        <div className="flex h-full items-center justify-center bg-vault-bg font-sans text-vault-text">
-          Starting…
+        <div className="relative flex h-full items-center justify-center overflow-hidden bg-vault-bg font-sans text-vault-text">
+          <Aurora />
+          <div className="relative flex flex-col items-center gap-4">
+            <LogoMark className="h-12 w-12 shadow-soft" />
+            <span className="text-sm font-medium text-vault-muted">Waking up your vault…</span>
+          </div>
         </div>
       </WindowShell>
     );
@@ -1113,180 +1246,274 @@ export default function App() {
   if (bootError) {
     return (
       <WindowShell>
-        <div className="flex h-full flex-col items-center justify-center gap-4 p-10 font-sans text-g-red">
-          <div className="text-lg font-semibold">Startup error</div>
-          <pre className="max-w-xl whitespace-pre-wrap text-sm">{bootError}</pre>
+        <div className="relative flex h-full flex-col items-center justify-center gap-4 overflow-hidden bg-vault-bg p-10 font-sans text-vault-danger">
+          <Aurora />
+          <div className="relative text-lg font-semibold">Startup error</div>
+          <pre className="relative max-w-xl whitespace-pre-wrap text-sm">{bootError}</pre>
         </div>
       </WindowShell>
     );
   }
 
+  const isCreateMode = authModeOverride ? authModeOverride === "create" : !vaultExists;
+
   if (!unlocked) {
     return (
       <WindowShell>
-      <div className="relative flex h-full min-h-0 items-center justify-center overflow-auto overflow-x-hidden bg-gradient-to-br from-[#f5f5f7] via-white to-[#e8f4ff] p-8">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_20%_0%,rgba(0,122,255,0.12),transparent_50%),radial-gradient(ellipse_at_80%_100%,rgba(175,82,222,0.08),transparent_45%)]" />
-        <div className="relative w-full max-w-md rounded-[28px] border border-black/[0.08] bg-white/80 p-10 shadow-float backdrop-blur-vault">
-          <div className="mb-8 flex flex-col items-center text-center">
-            <LogoMark className="h-14 w-14 shadow-md" />
-            <div className="mt-5 text-2xl font-semibold tracking-tight text-vault-text">
-              Myvault
-            </div>
-            <p className="mt-2 max-w-sm text-sm leading-relaxed text-vault-muted">
-              Encrypted vault on this device. Organize logins by category.
-            </p>
-          </div>
-          <form
-            className="block w-full"
-            noValidate
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (busy) return;
-              void (vaultExists ? handleUnlock() : handleCreateVault());
-            }}
-          >
-          {!vaultExists ? (
-            <>
-              <label className="block text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
-                Work email
-                {!supabaseRegistration.configured ? (
-                  <span className="ml-1 font-normal normal-case text-vault-muted/90">
-                    (optional)
-                  </span>
-                ) : (
-                  <span className="text-apple-red"> *</span>
-                )}
-              </label>
-              <input
-                type="email"
-                autoComplete="email"
-                spellCheck={false}
-                placeholder={
-                  supabaseRegistration.orgSuffix
-                    ? `you${supabaseRegistration.orgSuffix}`
-                    : "you@yourcompany.com"
-                }
-                value={accountEmail}
-                onChange={(e) => setAccountEmail(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key !== "Enter") return;
+        <div className="relative flex h-full min-h-0 items-center justify-center overflow-auto bg-white p-4 sm:p-8 lg:p-12 font-sans">
+          <Aurora />
+          
+          <div className="relative grid w-full max-w-5xl overflow-hidden rounded-[36px] border border-slate-200/90 bg-white shadow-lift lg:grid-cols-[1fr_1.1fr]">
+            {/* Form Column - Left */}
+            <div className="flex flex-col justify-center px-8 py-10 sm:px-12 lg:px-14">
+              {/* Brand Logo & Name */}
+              <div className="mb-6 flex items-center gap-2.5">
+                <LogoMark className="h-7 w-7" />
+                <span className="text-xl font-bold tracking-tight text-slate-900">Myvault</span>
+              </div>
+
+              {/* Title & Subtitle */}
+              <div>
+                <div className="mb-2.5 inline-flex items-center gap-1.5 rounded-full border border-orange-500/20 bg-orange-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-orange-600">
+                  ✦ Zero-Knowledge Vault
+                </div>
+                <h1 className="text-3xl font-bold tracking-tight text-slate-900">
+                  {isCreateMode ? "Create an account" : "Sign in"}
+                </h1>
+                <p className="mt-2 text-sm text-slate-500">
+                  {isCreateMode
+                    ? "Set your master credentials to initialize your encrypted sanctuary."
+                    : "Use the master password to access your Myvault."}
+                </p>
+              </div>
+
+              <form
+                className="mt-8 block w-full"
+                noValidate
+                onSubmit={(e) => {
                   e.preventDefault();
-                  if (!busy && !vaultExists) void handleCreateVault();
+                  if (busy) return;
+                  void (isCreateMode ? handleCreateVault() : handleUnlock());
                 }}
-                className="mt-2 w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2.5 text-sm text-vault-text outline-none ring-apple-blue/20 transition focus:ring-2"
-              />
-              <label className="mt-6 block text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
-                Master password
-              </label>
-              <div className="relative mt-2">
-                <input
-                  type={showCreateMp ? "text" : "password"}
-                  autoComplete="new-password"
-                  value={mp}
-                  onChange={(e) => setMp(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key !== "Enter") return;
-                    e.preventDefault();
-                    if (!busy && !vaultExists) void handleCreateVault();
-                  }}
-                  className="w-full rounded-xl border border-black/[0.08] bg-white py-2.5 pl-3 pr-11 text-sm text-vault-text outline-none ring-apple-blue/20 transition focus:ring-2"
-                />
+              >
+                {isCreateMode ? (
+                  <>
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Work email
+                      {!supabaseRegistration.configured ? (
+                        <span className="ml-1 font-normal text-slate-400">(optional)</span>
+                      ) : (
+                        <span className="text-rose-500"> *</span>
+                      )}
+                    </label>
+                    <input
+                      type="email"
+                      autoComplete="email"
+                      spellCheck={false}
+                      placeholder={
+                        supabaseRegistration.orgSuffix
+                          ? `you${supabaseRegistration.orgSuffix}`
+                          : "you@yourcompany.com"
+                      }
+                      value={accountEmail}
+                      onChange={(e) => setAccountEmail(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key !== "Enter") return;
+                        e.preventDefault();
+                        if (!busy) void handleCreateVault();
+                      }}
+                      className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder-slate-400 shadow-sm transition focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+                    />
+
+                    <label className="mt-4 block text-xs font-semibold text-slate-700">
+                      Master password
+                    </label>
+                    <div className="relative mt-1.5">
+                      <input
+                        type={showCreateMp ? "text" : "password"}
+                        autoComplete="new-password"
+                        placeholder="At least 8 characters"
+                        value={mp}
+                        onChange={(e) => setMp(e.target.value)}
+                        onKeyUp={(e) => setCapsLockOn(e.getModifierState?.("CapsLock") ?? false)}
+                        onKeyDown={(e) => {
+                          if (e.key !== "Enter") return;
+                          e.preventDefault();
+                          if (!busy) void handleCreateVault();
+                        }}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 pr-11 text-sm font-mono text-slate-900 placeholder-slate-400 shadow-sm transition focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+                      />
+                      <button
+                        type="button"
+                        aria-label={showCreateMp ? "Hide password" : "Show password"}
+                        onClick={() => setShowCreateMp((v) => !v)}
+                        className="absolute right-2.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-slate-400 hover:text-slate-700"
+                      >
+                        {showCreateMp ? <IconVisibilityClosed /> : <IconVisibilityOpen />}
+                      </button>
+                    </div>
+
+                    <label className="mt-4 block text-xs font-semibold text-slate-700">
+                      Confirm master password
+                    </label>
+                    <div className="relative mt-1.5">
+                      <input
+                        type={showConfirmMpVis ? "text" : "password"}
+                        autoComplete="new-password"
+                        placeholder="Repeat master password"
+                        value={confirmMp}
+                        onChange={(e) => setConfirmMp(e.target.value)}
+                        onKeyUp={(e) => setCapsLockOn(e.getModifierState?.("CapsLock") ?? false)}
+                        onKeyDown={(e) => {
+                          if (e.key !== "Enter") return;
+                          e.preventDefault();
+                          if (!busy) void handleCreateVault();
+                        }}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 pr-11 text-sm font-mono text-slate-900 placeholder-slate-400 shadow-sm transition focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+                      />
+                      <button
+                        type="button"
+                        aria-label={showConfirmMpVis ? "Hide password" : "Show password"}
+                        onClick={() => setShowConfirmMpVis((v) => !v)}
+                        className="absolute right-2.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-slate-400 hover:text-slate-700"
+                      >
+                        {showConfirmMpVis ? <IconVisibilityClosed /> : <IconVisibilityOpen />}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-semibold text-slate-700">
+                        Master password
+                      </label>
+                      <span className="font-mono text-[11px] text-slate-400">Press ↵ to sign in</span>
+                    </div>
+                    <div className="relative mt-1.5">
+                      <input
+                        autoFocus
+                        type={showUnlockPw ? "text" : "password"}
+                        autoComplete="current-password"
+                        placeholder="Enter master password"
+                        value={mp}
+                        onChange={(e) => setMp(e.target.value)}
+                        onKeyUp={(e) => setCapsLockOn(e.getModifierState?.("CapsLock") ?? false)}
+                        onKeyDown={(e) => {
+                          if (e.key !== "Enter") return;
+                          e.preventDefault();
+                          if (!busy) void handleUnlock();
+                        }}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 pr-11 text-sm font-mono text-slate-900 placeholder-slate-400 shadow-sm transition focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+                      />
+                      <button
+                        type="button"
+                        aria-label={showUnlockPw ? "Hide password" : "Show password"}
+                        onClick={() => setShowUnlockPw((v) => !v)}
+                        className="absolute right-2.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-slate-400 hover:text-slate-700"
+                      >
+                        {showUnlockPw ? <IconVisibilityClosed /> : <IconVisibilityOpen />}
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {capsLockOn && (
+                  <div className="mt-2.5 flex items-center gap-1.5 rounded-xl border border-amber-500/30 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800">
+                    <span className="h-2 w-2 rounded-full bg-amber-500" />
+                    Caps Lock is ON
+                  </div>
+                )}
+
+                {formError && (
+                  <p className="mt-3.5 rounded-xl border border-rose-500/30 bg-rose-50 px-3.5 py-2.5 text-xs font-medium text-rose-700">
+                    {formError}
+                  </p>
+                )}
+
                 <button
-                  type="button"
-                  aria-label={showCreateMp ? "Hide password" : "Show password"}
-                  onClick={() => setShowCreateMp((v) => !v)}
-                  className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-lg text-vault-muted transition hover:bg-black/[0.05] hover:text-vault-text"
+                  type="submit"
+                  disabled={busy}
+                  className="mt-6 w-full rounded-xl bg-[#121212] hover:bg-black py-3.5 text-sm font-semibold text-white shadow-sm transition active:scale-[0.99] disabled:opacity-50"
                 >
-                  {showCreateMp ? <IconVisibilityClosed /> : <IconVisibilityOpen />}
+                  {busy
+                    ? "Decrypting Enclave…"
+                    : isCreateMode
+                    ? "Create account"
+                    : "Sign in"}
                 </button>
-              </div>
-              <label className="mt-6 block text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
-                Confirm
-              </label>
-              <div className="relative mt-2">
-                <input
-                  type={showConfirmMpVis ? "text" : "password"}
-                  autoComplete="new-password"
-                  value={confirmMp}
-                  onChange={(e) => setConfirmMp(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key !== "Enter") return;
-                    e.preventDefault();
-                    if (!busy && !vaultExists) void handleCreateVault();
-                  }}
-                  className="w-full rounded-xl border border-black/[0.08] bg-white py-2.5 pl-3 pr-11 text-sm text-vault-text outline-none ring-apple-blue/20 transition focus:ring-2"
-                />
-                <button
-                  type="button"
-                  aria-label={showConfirmMpVis ? "Hide password" : "Show password"}
-                  onClick={() => setShowConfirmMpVis((v) => !v)}
-                  className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-lg text-vault-muted transition hover:bg-black/[0.05] hover:text-vault-text"
-                >
-                  {showConfirmMpVis ? (
-                    <IconVisibilityClosed />
+
+                {/* Footer mode toggle matching Screenshot 1 */}
+                <div className="mt-6 text-center text-xs text-slate-500">
+                  {isCreateMode ? (
+                    <>
+                      Already have a vault?{" "}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFormError(null);
+                          setAuthModeOverride("unlock");
+                        }}
+                        className="font-semibold text-orange-600 hover:text-orange-700 hover:underline"
+                      >
+                        Sign in
+                      </button>
+                    </>
                   ) : (
-                    <IconVisibilityOpen />
+                    <>
+                      New to Myvault?{" "}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFormError(null);
+                          setAuthModeOverride("create");
+                        }}
+                        className="font-semibold text-orange-600 hover:text-orange-700 hover:underline"
+                      >
+                        Create an account
+                      </button>
+                    </>
                   )}
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <label className="block text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
-                Master password
-              </label>
-              <div className="relative mt-2">
-                <input
-                  autoFocus
-                  type={showUnlockPw ? "text" : "password"}
-                  autoComplete="current-password"
-                  value={mp}
-                  onChange={(e) => setMp(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key !== "Enter") return;
-                    e.preventDefault();
-                    if (!busy && vaultExists) void handleUnlock();
-                  }}
-                  className="w-full rounded-xl border border-black/[0.08] bg-white py-2.5 pl-3 pr-11 text-sm text-vault-text outline-none ring-apple-blue/20 transition focus:ring-2"
+                </div>
+
+                {vaultExists && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRecoverModalOpen(true);
+                      setRecoveryError(null);
+                    }}
+                    className="mt-3 block w-full text-center text-xs text-slate-400 transition hover:text-orange-600"
+                  >
+                    Forgot master password? Recover vault
+                  </button>
+                )}
+              </form>
+            </div>
+
+            {/* Anime Visual Column - Right (matches user screenshot 1!) */}
+            <div className="relative hidden lg:flex flex-col items-center justify-center p-3.5">
+              <div className="relative h-full w-full min-h-[580px] overflow-hidden rounded-[30px] bg-gradient-to-b from-orange-50/50 to-amber-50/30 shadow-inner">
+                <img
+                  src={authArtSanctuary}
+                  alt="Myvault Anime Sanctuary"
+                  className="h-full w-full object-cover object-center"
                 />
-                <button
-                  type="button"
-                  aria-label={showUnlockPw ? "Hide password" : "Show password"}
-                  onClick={() => setShowUnlockPw((v) => !v)}
-                  className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-lg text-vault-muted transition hover:bg-black/[0.05] hover:text-vault-text"
-                >
-                  {showUnlockPw ? <IconVisibilityClosed /> : <IconVisibilityOpen />}
-                </button>
+                {/* Soft anime white mist at the bottom matching reference */}
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 h-44 bg-gradient-to-t from-white via-white/50 to-transparent" />
+
+                {/* Anime solarpunk status pill */}
+                <div className="pointer-events-none absolute right-4 top-4 inline-flex items-center gap-1.5 rounded-full border border-white/60 bg-white/80 px-3 py-1 text-[11px] font-semibold text-slate-800 shadow-sm backdrop-blur-md">
+                  <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                  Enclave Armed
+                </div>
               </div>
-            </>
-          )}
-          {formError ? <p className="mt-4 text-sm text-apple-red">{formError}</p> : null}
-          <button
-            type="submit"
-            disabled={busy}
-            className="mt-8 w-full rounded-xl bg-apple-blue py-3 text-sm font-semibold text-white shadow-md shadow-apple-blue/25 transition hover:bg-[#0066d6] disabled:opacity-50"
-          >
-            {!vaultExists ? "Create vault" : "Unlock"}
-          </button>
-          {vaultExists && supabaseRegistration.configured && unlockRejectedBadPw ? (
-            <button
-              type="button"
-              onClick={() => {
-                setRecoverModalOpen(true);
-                setRecoveryError(null);
-              }}
-              className="mt-5 w-full text-center text-sm font-medium text-apple-blue transition hover:underline"
-            >
-              Forgot password?
-            </button>
-          ) : null}
-          </form>
-        </div>
+            </div>
+          </div>
         {recoverModalOpen ? (
           <div className="fixed inset-0 z-[200] flex items-center justify-center p-5">
             <button
               type="button"
-              className="absolute inset-0 bg-slate-900/35 backdrop-blur-sm"
+              className="absolute inset-0 bg-black/60 backdrop-blur-md"
               aria-label="Close reset dialog"
               onClick={closeRecoveryModal}
             />
@@ -1294,16 +1521,22 @@ export default function App() {
               role="dialog"
               aria-modal="true"
               aria-labelledby="reset-pw-title"
-              className="relative z-10 flex w-full max-w-md flex-col gap-3 rounded-[28px] border border-white/55 bg-white/60 p-8 shadow-float backdrop-blur-2xl"
+              className="glass-modal animate-vault-modal relative z-10 flex w-full max-w-md flex-col gap-3 rounded-[28px] p-8"
             >
+              <div className="text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-vault-accentDeep">
+                Recovery protocol
+              </div>
               <div
                 id="reset-pw-title"
-                className="text-center text-xl font-semibold tracking-tight text-vault-text"
+                className="font-display text-center text-2xl font-semibold tracking-tight text-vault-text"
               >
-                Reset password
+                Reset your password
               </div>
-              <label className="mt-1 block text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
-                Encryption key
+              <p className="text-center text-[13px] leading-relaxed text-vault-muted">
+                Paste your emergency encryption recovery key, then choose a fresh master password.
+              </p>
+              <label className="mt-2 block text-[10px] font-semibold uppercase tracking-[0.08em] text-vault-muted">
+                Encryption recovery key
               </label>
               <input
                 type="text"
@@ -1311,20 +1544,21 @@ export default function App() {
                 spellCheck={false}
                 value={recoveryKeyPlain}
                 onChange={(e) => setRecoveryKeyPlain(e.target.value)}
-                placeholder="e.g. a1b2c3d4e5f6… (paste full key)"
-                className="w-full rounded-xl border border-black/[0.08] bg-white/90 px-3 py-2.5 font-mono text-xs tracking-wide text-vault-text outline-none ring-apple-blue/20 transition focus:ring-2"
+                placeholder="Paste full 64-character key"
+                className="vault-input font-mono text-xs"
               />
-              <label className="mt-1 block text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
-                New password
+              <label className="mt-2 block text-[10px] font-semibold uppercase tracking-[0.08em] text-vault-muted">
+                New master password
               </label>
               <input
                 type="password"
                 autoComplete="new-password"
                 value={recoveryNewPw}
                 onChange={(e) => setRecoveryNewPw(e.target.value)}
-                className="w-full rounded-xl border border-black/[0.08] bg-white/90 px-3 py-2.5 text-sm text-vault-text outline-none ring-apple-blue/20 transition focus:ring-2"
+                placeholder="At least 8 characters"
+                className="vault-input text-sm"
               />
-              <label className="block text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
+              <label className="mt-2 block text-[10px] font-semibold uppercase tracking-[0.08em] text-vault-muted">
                 Confirm new password
               </label>
               <input
@@ -1332,27 +1566,28 @@ export default function App() {
                 autoComplete="new-password"
                 value={recoveryConfirmPw}
                 onChange={(e) => setRecoveryConfirmPw(e.target.value)}
-                className="w-full rounded-xl border border-black/[0.08] bg-white/90 px-3 py-2.5 text-sm text-vault-text outline-none ring-apple-blue/20 transition focus:ring-2"
+                placeholder="Repeat password"
+                className="vault-input text-sm"
               />
               {recoveryError ? (
-                <p className="text-sm text-apple-red">{recoveryError}</p>
+                <p className="rounded-xl border border-vault-danger/30 bg-vault-danger/10 px-3.5 py-2.5 text-xs font-medium text-vault-danger">{recoveryError}</p>
               ) : null}
-              <div className="mt-3 flex gap-3">
+              <div className="mt-5 flex gap-3">
                 <button
                   type="button"
                   disabled={recoveryBusy}
                   onClick={closeRecoveryModal}
-                  className="flex-1 rounded-xl border border-black/[0.12] bg-white/80 py-3 text-sm font-semibold text-vault-text shadow-sm transition hover:bg-white disabled:opacity-50"
+                  className="flex-1 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 py-2.5 text-sm font-medium text-slate-700 transition"
                 >
-                  Decline
+                  Cancel
                 </button>
                 <button
                   type="button"
                   disabled={recoveryBusy}
                   onClick={() => void handleRecoveryConfirm()}
-                  className="flex-1 rounded-xl bg-apple-blue py-3 text-sm font-semibold text-white shadow-md shadow-apple-blue/25 transition hover:bg-[#0066d6] disabled:opacity-50"
+                  className="flex-1 rounded-xl bg-[#121212] hover:bg-black py-2.5 text-sm font-semibold text-white shadow-sm transition active:scale-[0.98] disabled:opacity-50"
                 >
-                  {recoveryBusy ? "Working…" : "Confirm"}
+                  {recoveryBusy ? "Working…" : "Reset password"}
                 </button>
               </div>
             </div>
@@ -1373,12 +1608,31 @@ export default function App() {
     );
   }
 
-  const showCategoryPanel = pane === "items";
-  const showNotesFolderPanel = pane === "notes";
-  /* Fixed rail: left 16px + icon 56px + gap 12px + secondary 220px; +12 matches gap-3 between rail & panel */
-  const sidebarOccupiedPx = showCategoryPanel || showNotesFolderPanel ? 304 : 96;
-  const gapBeforeContentPx = 12;
-  const mainPadLeft = sidebarOccupiedPx + gapBeforeContentPx;
+  if (unlocked && compactMode) {
+    return (
+      <MiniVault
+        items={items}
+        pinned={vaultPinnedFront}
+        collapsed={miniCollapsed}
+        onCollapse={() => void collapseMini(true)}
+        onRestore={() => void collapseMini(false)}
+        onTogglePin={() => setPinnedAndSync(!vaultPinnedFront)}
+        onExpand={() => void setCompact(false)}
+        onCopy={(entry) => {
+          if (!entry.password) return;
+          void api.copyToClipboard(entry.password, 30000);
+          showToast("Password copied");
+          void api.pingActivity();
+        }}
+        onNotify={showToast}
+        toast={toast}
+      />
+    );
+  }
+
+  const sidebarOccupiedPx = 240;
+  const gapBeforeContentPx = 16;
+  const mainPadLeft = sidebarOccupiedPx + gapBeforeContentPx + 16;
 
   const hasWinChrome = typeof api?.winMinimize === "function";
   const railTopClass = hasWinChrome ? "top-[60px]" : "top-4";
@@ -1386,242 +1640,216 @@ export default function App() {
 
   return (
     <WindowShell>
-    <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-gradient-to-br from-[#f5f5f7] via-white to-[#eef3ff] font-sans text-vault-text">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_120%_80%_at_50%_-20%,rgba(0,122,255,0.06),transparent),radial-gradient(ellipse_80%_50%_at_100%_50%,rgba(52,168,83,0.04),transparent)]" />
+    <div className="vault-app relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-white font-sans text-vault-text">
+      <Aurora />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_60%_45%_at_100%_100%,rgba(249,115,22,0.06),transparent_60%)]" />
 
-      <div className="relative flex min-h-0 flex-1" style={{ paddingLeft: mainPadLeft }}>
-        <div className={`pointer-events-none fixed left-4 z-40 flex gap-3 ${railTopClass} ${railHeightClass}`}>
-          <nav className="glass-rail pointer-events-auto flex w-[56px] flex-col items-center rounded-2xl px-2 py-4">
-            <button
-              type="button"
-              className="flex h-11 w-11 items-center justify-center rounded-xl transition-opacity hover:opacity-90"
-              title="Myvault home"
-              onClick={() => {
-                setPane("items");
-                setCategoryFilter(null);
-                void api.pingActivity();
-              }}
-            >
-              <LogoMark className="h-9 w-9" />
-            </button>
-            <div className="my-4 h-px w-8 bg-black/[0.06]" />
-            <RailIconButton
-              title="All items"
-              active={pane === "items"}
-              onClick={() => {
-                setPane("items");
-                void api.pingActivity();
-              }}
-            >
-              <IconGrid />
-            </RailIconButton>
-            <RailIconButton
-              title="Notes"
-              active={pane === "notes"}
-              onClick={() => {
-                setPane("notes");
-                void api.pingActivity();
-              }}
-            >
-              <IconNotes />
-            </RailIconButton>
-            <RailIconButton
-              title="Favorites"
-              active={pane === "favorites"}
-              onClick={() => {
-                setCategoryFilter(null);
-                setPane("favorites");
-                void api.pingActivity();
-              }}
-            >
-              <IconStarSoft />
-            </RailIconButton>
-            <RailIconButton
-              title="Browser extension"
-              active={pane === "extension"}
-              onClick={() => {
-                setPane("extension");
-                void api.pingActivity();
-              }}
-            >
-              <IconExtension />
-            </RailIconButton>
-            <div className="flex-1" />
-            <RailIconButton title="Lock vault" active={false} onClick={() => void handleLock()}>
-              <IconLock />
-            </RailIconButton>
-          </nav>
-
-          {showNotesFolderPanel ? (
-            <aside className="glass-rail pointer-events-auto flex w-[220px] flex-col overflow-hidden rounded-2xl">
-              <div className="border-b border-black/[0.06] px-4 py-3.5">
-                <div className="text-[13px] font-semibold">Note folders</div>
-                <p className="mt-1 text-[11px] leading-snug text-vault-muted">
-                  Filter notes · add folders for your notes
-                </p>
+      <div className="vault-layout relative flex min-h-0 flex-1" style={{ paddingLeft: mainPadLeft }}>
+        <div className={`pointer-events-none fixed left-4 z-40 flex ${railTopClass} ${railHeightClass}`}>
+          <nav
+            aria-label="Vault navigation"
+            className="pointer-events-auto flex w-[240px] flex-col justify-between overflow-hidden rounded-[24px] border border-slate-200/90 bg-white p-3.5 shadow-sm"
+          >
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              {/* Brand Logo & Name matching Reference */}
+              <div className="flex items-center gap-2.5 px-2 py-1">
+                <LogoMark className="h-6 w-6" />
+                <span className="text-base font-bold tracking-tight text-slate-900">Myvault</span>
               </div>
-              <div className="max-h-[40vh] min-h-0 flex-1 overflow-y-auto px-2 py-2">
+
+              {/* Workspace Selector */}
+              <div className="mt-3 flex items-center justify-between rounded-xl border border-slate-200/80 bg-slate-50/70 px-3 py-2 text-xs font-semibold text-slate-800">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="h-2 w-2 rounded-full bg-orange-500 shrink-0" />
+                  <span className="truncate">{formatUserNameFromEmail(accountEmail)}'s vault</span>
+                </div>
+                <span className="text-[11px] text-slate-400">↕</span>
+              </div>
+
+              {/* Action button */}
+              <button
+                type="button"
+                onClick={openAddCredential}
+                className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl bg-[#121212] hover:bg-black py-2.5 text-xs font-semibold text-white shadow-sm transition active:scale-[0.98]"
+              >
+                <span className="text-sm font-bold leading-none">+</span>
+                <span>New login</span>
+              </button>
+
+              {/* Navigation list */}
+              <div className="mt-4 space-y-1">
                 <button
                   type="button"
                   onClick={() => {
-                    setNoteFolderFilter(null);
+                    setPane("items");
+                    setCategoryFilter(null);
                     void api.pingActivity();
                   }}
-                  className={`mb-1 w-full rounded-xl px-3 py-2.5 text-left text-[13px] transition ${
-                    noteFolderFilter == null
-                      ? "bg-apple-blue/12 font-medium text-apple-blue"
-                      : "text-vault-muted hover:bg-black/[0.04]"
+                  className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-xs font-medium transition ${
+                    pane === "items" && categoryFilter == null
+                      ? "bg-slate-100 font-semibold text-slate-900"
+                      : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
                   }`}
                 >
-                  All folders
+                  <IconGrid />
+                  <span>All logins</span>
+                  <span className="ml-auto text-[11px] font-mono text-slate-400">{items.length}</span>
                 </button>
-                {noteFolders
-                  .filter((f) => String(f.name).toLowerCase() !== "inbox")
-                  .map((f) => (
-                  <div key={f.id} className="mb-1 flex items-center gap-0.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setNoteFolderFilter(f.id);
-                        void api.pingActivity();
-                      }}
-                      className={`min-w-0 flex-1 truncate rounded-xl px-3 py-2.5 text-left text-[13px] transition ${
-                        noteFolderFilter === f.id
-                          ? "bg-apple-blue/12 font-medium text-apple-blue"
-                          : "text-vault-muted hover:bg-black/[0.04]"
-                      }`}
-                    >
-                      {f.name}
-                    </button>
-                    <button
-                      type="button"
-                      title="Remove folder"
-                      className="shrink-0 rounded-lg px-2 py-2 text-vault-muted transition hover:bg-g-red/10 hover:text-g-red"
-                      onClick={() => void removeNoteFolder(f)}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setNoteFolderModal(true);
-                    setNewNoteFolderName("");
-                  }}
-                  className="mt-1 flex w-full items-center gap-2 rounded-xl border border-dashed border-black/15 px-3 py-2.5 text-left text-[13px] text-apple-blue transition hover:bg-apple-blue/5"
-                >
-                  <span className="text-lg leading-none">+</span>
-                  Add folder
-                </button>
-              </div>
-            </aside>
-          ) : null}
 
-          {showCategoryPanel ? (
-            <aside className="glass-rail pointer-events-auto flex w-[220px] flex-col overflow-hidden rounded-2xl">
-              <div className="border-b border-black/[0.06] px-4 py-3.5">
-                <div className="text-[13px] font-semibold">Categories</div>
-                <p className="mt-1 text-[11px] leading-snug text-vault-muted">
-                  Filter vault · add folders here
-                </p>
-              </div>
-              <div className="max-h-[40vh] min-h-0 flex-1 overflow-y-auto px-2 py-2">
                 <button
                   type="button"
                   onClick={() => {
                     setCategoryFilter(null);
-                    setPane("items");
+                    setPane("favorites");
                     void api.pingActivity();
                   }}
-                  className={`mb-1 w-full rounded-xl px-3 py-2.5 text-left text-[13px] transition ${
-                    categoryFilter == null
-                      ? "bg-apple-blue/12 font-medium text-apple-blue"
-                      : "text-vault-muted hover:bg-black/[0.04]"
+                  className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-xs font-medium transition ${
+                    pane === "favorites"
+                      ? "bg-slate-100 font-semibold text-slate-900"
+                      : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
                   }`}
                 >
-                  All categories
+                  <IconStarSoft />
+                  <span>Favorites</span>
+                  {favoritesDashboardRows.length > 0 ? (
+                    <span className="ml-auto text-[11px] font-mono text-slate-400">
+                      {favoritesDashboardRows.length}
+                    </span>
+                  ) : null}
                 </button>
-                {categoriesSidebar.map((c) => (
-                  <div key={c.id} className="mb-1 flex items-center gap-0.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCategoryFilter(c.id);
-                        setPane("items");
-                        void api.pingActivity();
-                      }}
-                      className={`min-w-0 flex-1 truncate rounded-xl px-3 py-2.5 text-left text-[13px] transition ${
-                        categoryFilter === c.id
-                          ? "bg-apple-blue/12 font-medium text-apple-blue"
-                          : "text-vault-muted hover:bg-black/[0.04]"
+              </div>
+
+              {/* Section: Categories */}
+              <div className="mt-6 border-t border-slate-100 pt-4 flex-1 min-h-0 flex flex-col">
+                <div className="flex items-center justify-between px-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  <span>Categories</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCategoryModal(true);
+                      setNewCatName("");
+                    }}
+                    className="flex h-5 w-5 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-900 transition text-sm font-bold"
+                    title="Add category"
+                  >
+                    +
+                  </button>
+                </div>
+
+                <div className="mt-2.5 space-y-1 overflow-y-auto pr-1 flex-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCategoryFilter(null);
+                      setPane("items");
+                      void api.pingActivity();
+                    }}
+                    className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-xs transition ${
+                      categoryFilter == null && pane === "items"
+                        ? "bg-slate-100 font-semibold text-slate-900"
+                        : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                    }`}
+                  >
+                    <span className="text-[10px] text-orange-500">✦</span>
+                    <span className="truncate">All logins</span>
+                    <span className="ml-auto text-[11px] font-mono text-slate-400">{items.length}</span>
+                  </button>
+                  {categoriesSidebar.map((c) => (
+                    <div
+                      key={c.id}
+                      className={`group/item flex items-center justify-between rounded-xl px-2.5 py-1.5 text-xs transition ${
+                        categoryFilter === c.id && pane === "items"
+                          ? "bg-slate-100 font-semibold text-slate-900"
+                          : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
                       }`}
                     >
-                      {c.name}
-                    </button>
-                    {c.name !== "General" ? (
                       <button
                         type="button"
-                        title="Remove category"
-                        className="shrink-0 rounded-lg px-2 py-2 text-vault-muted transition hover:bg-g-red/10 hover:text-g-red"
+                        onClick={() => {
+                          setCategoryFilter(c.id);
+                          setPane("items");
+                          void api.pingActivity();
+                        }}
+                        className="truncate flex-1 text-left"
+                      >
+                        {c.name}
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => void removeCategory(c)}
+                        className="opacity-0 group-hover/item:opacity-100 text-slate-400 hover:text-rose-500 px-1 transition text-sm"
+                        title={`Delete ${c.name}`}
                       >
                         ×
                       </button>
-                    ) : (
-                      <span className="w-7 shrink-0" />
-                    )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Bottom Profile Row */}
+            <div className="border-t border-slate-100 pt-3">
+              <div className="flex items-center justify-between gap-2 px-1">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-orange-500 to-amber-600 text-xs font-bold text-white shadow-sm ring-2 ring-orange-500/20">
+                    {formatUserNameFromEmail(accountEmail).charAt(0).toUpperCase()}
                   </div>
-                ))}
+                  <div className="min-w-0">
+                    <div className="truncate text-xs font-semibold text-slate-800">
+                      {formatUserNameFromEmail(accountEmail)}
+                    </div>
+                    <div className="flex items-center gap-1.5 text-[10px] font-medium text-emerald-600 leading-none">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      Enclave Armed
+                    </div>
+                  </div>
+                </div>
                 <button
                   type="button"
-                  onClick={() => {
-                    setCategoryModal(true);
-                    setNewCatName("");
-                  }}
-                  className="mt-1 flex w-full items-center gap-2 rounded-xl border border-dashed border-black/15 px-3 py-2.5 text-left text-[13px] text-apple-blue transition hover:bg-apple-blue/5"
+                  title="Lock vault"
+                  onClick={() => void handleLock()}
+                  className="rounded-lg p-1.5 text-slate-400 transition hover:bg-orange-50 hover:text-orange-600"
                 >
-                  <span className="text-lg leading-none">+</span>
-                  Add category
+                  <IconLock />
                 </button>
               </div>
-            </aside>
-          ) : null}
+            </div>
+          </nav>
         </div>
 
-        <div className="relative flex min-w-0 flex-1 flex-col pl-0 pr-6 pt-6 pb-8 lg:pr-8">
+        <main id="vault-content" className="vault-workspace relative flex min-w-0 flex-1 flex-col pl-0 pr-6 pt-7 pb-8 lg:pr-8">
           {pane === "extension" ? (
             <>
               <header className="mb-6 flex items-center gap-4">
                 <h1
                   key={headerTitle}
-                  className="animate-vault-header text-xl font-semibold tracking-tight"
+                  className="animate-vault-header text-[11px] font-semibold uppercase tracking-[0.12em] text-vault-accentDeep"
                 >
                   {headerTitle}
                 </h1>
               </header>
               <div className="max-w-2xl space-y-6 text-sm">
-                <p className="text-vault-muted">
-                  Paste the token into the extension options. The API is available while this vault
-                  is unlocked.
+                <p className="max-w-xl text-[15px] leading-relaxed text-vault-muted">
+                  Connect your browser once, then save and fill credentials without leaving your flow.
                 </p>
-                <div className="glass-panel rounded-2xl p-6">
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
+                <div className="glass-panel rounded-[26px] p-6">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.1em] text-vault-accentDeep">
                     API base URL
                   </div>
-                  <code className="mt-2 block break-all rounded-lg bg-black/[0.04] px-3 py-2 text-[13px] text-g-blue">
+                  <code className="mt-2 block break-all rounded-xl bg-vault-accentSoft/45 px-3 py-2 text-[13px] text-vault-accentDeep">
                     {apiBaseUrl}
                   </code>
-                  <div className="mt-6 text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
+                  <div className="mt-6 text-[11px] font-semibold uppercase tracking-[0.1em] text-vault-accentDeep">
                     Bearer token
                   </div>
-                  <div className="mt-2 rounded-lg bg-black/[0.04] px-3 py-3 font-mono text-xs text-vault-text">
+                  <div className="mt-2 rounded-xl bg-vault-accentSoft/45 px-3 py-3 font-mono text-xs text-vault-text">
                     <TokenMask />
                   </div>
                   <div className="mt-6 flex flex-wrap gap-2">
                     <button
                       type="button"
-                      className="rounded-xl border border-black/[0.08] bg-white px-4 py-2 text-xs font-medium shadow-sm"
+                      className="btn-secondary px-4 py-2 text-xs"
                       onClick={async () => {
                         const t = await api.getExtensionToken();
                         await api.copyToClipboard(t || "");
@@ -1632,7 +1860,7 @@ export default function App() {
                     </button>
                     <button
                       type="button"
-                      className="rounded-xl border border-g-yellow/40 bg-g-yellow/10 px-4 py-2 text-xs font-medium text-[#b06000]"
+                      className="btn-secondary px-4 py-2 text-xs"
                       onClick={async () => {
                         if (
                           window.confirm(
@@ -1650,8 +1878,8 @@ export default function App() {
                     </button>
                   </div>
                 </div>
-                <div className="glass-panel rounded-2xl p-6">
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
+                <div className="glass-panel rounded-[26px] p-6">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.1em] text-vault-accentDeep">
                     App updates
                   </div>
                   <p className="mt-2 text-[13px] leading-relaxed text-vault-muted">
@@ -1672,7 +1900,7 @@ export default function App() {
                             ? "Use the packaged desktop app"
                             : "Compare this build with the latest GitHub release"
                         }
-                        className="rounded-xl border border-black/[0.08] bg-white px-4 py-2 text-xs font-medium shadow-sm transition hover:bg-black/[0.02] disabled:cursor-not-allowed disabled:opacity-50"
+                        className="btn-secondary px-4 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-50"
                         onClick={() => void checkUpdatesFromUi()}
                       >
                         {updaterChecking ? "Checking…" : "Check for updates"}
@@ -1696,9 +1924,9 @@ export default function App() {
                   </div>
                   {typeof updaterDownloadProgress === "number" ? (
                     <div className="mt-5">
-                      <div className="h-2 overflow-hidden rounded-full bg-black/[0.06]">
+                      <div className="h-2 overflow-hidden rounded-full bg-vault-accentSoft/70">
                         <div
-                          className="h-2 rounded-full bg-apple-blue transition-[width] duration-300"
+                          className="h-2 rounded-full bg-vault-accent transition-[width] duration-300"
                           style={{
                             width: `${Math.min(
                               100,
@@ -1718,7 +1946,7 @@ export default function App() {
                     </p>
                   ) : null}
                   {updaterOffer && updaterPackaged !== false ? (
-                    <div className="mt-5 rounded-xl border border-apple-blue/20 bg-white/65 px-4 py-3 shadow-sm backdrop-blur-sm">
+                    <div className="mt-5 rounded-2xl border border-vault-accent/20 bg-vault-accentSoft/35 px-4 py-3 shadow-sm backdrop-blur-sm">
                       <div className="text-[13px] font-semibold text-vault-text">
                         {updaterDownloadedVersion &&
                         updaterOffer &&
@@ -1738,7 +1966,7 @@ export default function App() {
                               updaterDlBusy ||
                               typeof api?.downloadAvailableUpdate !== "function"
                             }
-                            className="rounded-xl bg-apple-blue px-4 py-2 text-xs font-semibold text-white shadow-md shadow-apple-blue/20 transition hover:bg-[#0066d6] disabled:cursor-not-allowed disabled:opacity-50"
+                            className="rounded-xl bg-[#121212] hover:bg-black px-4 py-2 text-xs font-semibold text-white shadow-sm transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
                             onClick={() => void beginUpdaterDownload()}
                           >
                             {updaterDlBusy ? "Downloading…" : "Download & update"}
@@ -1747,7 +1975,7 @@ export default function App() {
                           <button
                             type="button"
                             disabled={typeof api?.quitAndInstallUpdate !== "function"}
-                            className="rounded-xl bg-apple-blue px-4 py-2 text-xs font-semibold text-white shadow-md shadow-apple-blue/20 transition hover:bg-[#0066d6] disabled:cursor-not-allowed disabled:opacity-50"
+                            className="rounded-xl bg-[#121212] hover:bg-black px-4 py-2 text-xs font-semibold text-white shadow-sm transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
                             onClick={quitAndInstallFromUi}
                           >
                             Restart to install now
@@ -1761,52 +1989,55 @@ export default function App() {
             </>
           ) : pane === "notes" ? (
             <>
-              <header className="mb-6 flex flex-wrap items-center gap-4">
-                <h1
-                  key={`notes-${noteFolderFilter ?? "all"}`}
-                  className="animate-vault-header min-w-[8rem] text-xl font-semibold tracking-tight"
-                >
-                  {headerTitle}
-                </h1>
+              <header className="mb-7 flex flex-wrap items-end gap-4">
+                <div>
+                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.13em] text-vault-accentDeep">Private writing space</div>
+                  <h1
+                    key={`notes-${noteFolderFilter ?? "all"}`}
+                    className="animate-vault-header font-display min-w-[8rem] text-[32px] font-semibold tracking-[-0.02em]"
+                  >
+                    {headerTitle}
+                  </h1>
+                </div>
                 <div className="flex min-w-[200px] flex-1 justify-end gap-3">
                   <input
                     value={noteSearch}
                     placeholder="Search notes…"
                     onChange={(e) => setNoteSearch(e.target.value)}
-                    className="min-w-[12rem] max-w-md flex-1 rounded-xl border border-black/[0.08] bg-white/90 px-4 py-2.5 text-sm text-vault-text shadow-sm outline-none ring-apple-blue/25 transition placeholder:text-vault-muted/80 focus:ring-2"
+                    className="vault-input min-w-[12rem] max-w-md flex-1 text-sm"
                   />
                   <button
                     type="button"
-                    className="shrink-0 rounded-xl bg-apple-blue px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-apple-blue/20 transition hover:bg-[#0066d6]"
+                    className="shrink-0 rounded-2xl bg-[#121212] hover:bg-black px-6 py-3 text-sm font-semibold text-white shadow-sm transition active:scale-[0.98]"
                     onClick={() => openCreateNoteModal()}
                   >
-                    Add note
+                    Create a note
                   </button>
                 </div>
               </header>
-              <p className="-mt-4 mb-6 text-[13px] text-vault-muted">
-                Notes stay inside Myvault on this device, saved to your local vault database when you type.
+              <p className="-mt-5 mb-7 text-[13px] text-vault-muted">
+                A quiet space for the details you want close. Your changes are saved as you write.
               </p>
               {notesFiltered.length === 0 ? (
                 <div className="glass-panel mx-auto mt-8 flex max-w-lg flex-col items-center rounded-[28px] px-10 py-16 text-center">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-apple-blue/12 text-apple-blue">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-vault-accentSoft/40 text-vault-accentDeep">
                     <IconNotesLarge />
                   </div>
-                  <h2 className="mt-6 text-lg font-semibold text-vault-text">No notes yet</h2>
+                  <h2 className="font-display mt-6 text-2xl font-semibold tracking-tight text-vault-text">Start your private notebook.</h2>
                   <p className="mt-3 max-w-sm text-sm leading-relaxed text-vault-muted">
-                    Capture quick thoughts in lined notes. Pick a folder on the left, then add your first note.
+                    Keep recovery codes, thoughts, and sensitive details encrypted in one quiet place.
                   </p>
                   <button
                     type="button"
                     onClick={() => openCreateNoteModal()}
-                    className="mt-8 rounded-xl bg-apple-blue px-8 py-3 text-sm font-semibold text-white shadow-lg shadow-apple-blue/25"
+                    className="mt-8 rounded-xl bg-[#121212] hover:bg-black px-8 py-3 text-sm font-semibold text-white shadow-sm transition active:scale-[0.98]"
                   >
-                    Add note
+                    Create my first note
                   </button>
                 </div>
               ) : (
                 <div className="animate-vault-grid grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-                  {notesFiltered.map((n) => (
+                  {notesFiltered.map((n, index) => (
                     <div
                       key={n.id}
                       role="button"
@@ -1822,14 +2053,14 @@ export default function App() {
                           void api.pingActivity();
                         }
                       }}
-                      className="group relative flex min-h-[8rem] w-full min-w-0 cursor-pointer flex-col overflow-hidden rounded-2xl border border-black/[0.08] text-left shadow-sm outline-none ring-apple-blue/25 transition-[box-shadow,transform] hover:-translate-y-0.5 hover:shadow-float focus-visible:ring-2"
-                      style={noteCardSurfaceStyle(n.color)}
+                      className="reveal-card card-lift group relative flex min-h-[10rem] w-full min-w-0 cursor-pointer flex-col overflow-hidden rounded-[22px] border border-white/70 text-left shadow-soft outline-none ring-vault-accent/25 hover:shadow-float focus-visible:ring-2"
+                      style={{ ...noteCardSurfaceStyle(n.color), "--i": index }}
                     >
                       <div className="pointer-events-none absolute left-0 right-0 top-0 z-10 flex items-center justify-between gap-2 px-2 pt-2">
                         <button
                           type="button"
                           title="Bring to desktop"
-                          className="pointer-events-auto rounded-lg p-1.5 text-vault-text/75 transition hover:bg-black/[0.07] hover:text-apple-blue"
+                          className="pointer-events-auto rounded-lg p-1.5 text-vault-text/75 transition hover:bg-vault-accentSoft/50 hover:text-vault-accentDeep"
                           onClick={(e) => {
                             e.stopPropagation();
                             void (async () => {
@@ -1845,8 +2076,8 @@ export default function App() {
                           <button
                             type="button"
                             title={n.favorite ? "Remove from favorites" : "Add to favorites"}
-                            className={`pointer-events-auto rounded-lg p-1.5 transition hover:bg-black/[0.07] ${
-                              n.favorite ? "text-g-yellow" : "text-vault-text/55"
+                            className={`pointer-events-auto rounded-lg p-1.5 transition hover:bg-vault-accentSoft/50 ${
+                              n.favorite ? "text-vault-accentDeep" : "text-vault-text/55"
                             }`}
                             onClick={(e) => {
                               e.stopPropagation();
@@ -1871,8 +2102,8 @@ export default function App() {
                           <button
                             type="button"
                             title={vaultPinnedFront ? "Unpin vault from front" : "Pin vault in front of other apps"}
-                            className={`pointer-events-auto rounded-lg p-1.5 transition hover:bg-black/[0.07] ${
-                              vaultPinnedFront ? "text-apple-blue" : "text-vault-text/55"
+                            className={`pointer-events-auto rounded-lg p-1.5 transition hover:bg-vault-accentSoft/50 ${
+                              vaultPinnedFront ? "text-vault-accentDeep" : "text-vault-text/55"
                             }`}
                             onClick={(e) => {
                               e.stopPropagation();
@@ -1900,39 +2131,37 @@ export default function App() {
           ) : pane === "favorites" ? (
             <>
               <header className="mb-6 flex flex-wrap items-center gap-4">
-                <h1 className="animate-vault-header min-w-[8rem] text-xl font-semibold tracking-tight">
-                  Favorites
+                <h1 className="animate-vault-header font-display min-w-[8rem] text-[28px] font-semibold tracking-tight">
+                  Starred items
                 </h1>
                 <div className="flex min-w-[200px] flex-1 justify-end">
                   <input
                     value={search}
                     placeholder="Search favorites…"
                     onChange={(e) => setSearch(e.target.value)}
-                    className="min-w-[12rem] max-w-md flex-1 rounded-xl border border-black/[0.08] bg-white/90 px-4 py-2.5 text-sm text-vault-text shadow-sm outline-none ring-apple-blue/25 transition placeholder:text-vault-muted/80 focus:ring-2"
+                    className="vault-input min-w-[12rem] max-w-md flex-1 text-sm"
                   />
                 </div>
               </header>
               <p className="-mt-4 mb-6 text-[13px] text-vault-muted">
-                Passwords and notes you starred — sorted by recently updated.
+                Passwords and notes you starred, ordered by recently updated.
               </p>
               {favoritesDashboardRows.length === 0 ? (
                 <div className="glass-panel mx-auto mt-8 flex max-w-lg flex-col items-center rounded-[28px] px-10 py-16 text-center">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-g-yellow/15 text-g-yellow">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-vault-accentSoft/40 text-vault-accentDeep">
                     <svg
-                      width="36"
-                      height="36"
+                      width="32"
+                      height="32"
                       viewBox="0 0 24 24"
                       fill="currentColor"
-                      className="opacity-90"
                       aria-hidden
                     >
                       <path d="M12 2.5c.4 0 .8.2 1 .6l2.1 4.3 4.7.7c.5.1.9.5 1 1 .1.5-.1 1-.5 1.3l-3.4 3.3.8 4.7c.1.5-.1 1-.5 1.3-.4.3-1 .3-1.4 0L12 18.2 8.3 20.4c-.4.3-1 .2-1.4-.1-.4-.3-.6-.8-.5-1.3l.8-4.7-3.4-3.3c-.4-.3-.6-.8-.5-1.3.1-.5.5-.9 1-1l4.7-.7 2.1-4.3c.2-.4.6-.6 1-.6z" />
                     </svg>
                   </div>
-                  <h2 className="mt-6 text-lg font-semibold text-vault-text">No favorites yet</h2>
+                  <h2 className="font-display mt-6 text-2xl font-semibold tracking-tight text-vault-text">Your quick-access space is empty.</h2>
                   <p className="mt-3 max-w-sm text-sm leading-relaxed text-vault-muted">
-                    Go to <strong>All items</strong> or <strong>Notes</strong> and tap the star on a password card or
-                    note to show it here.
+                    Star the logins and notes you reach for most. They will appear here, ready when you need them.
                   </p>
                 </div>
               ) : (
@@ -1995,14 +2224,14 @@ export default function App() {
                             void api.pingActivity();
                           }
                         }}
-                        className="group relative flex min-h-[8rem] w-full min-w-0 cursor-pointer flex-col overflow-hidden rounded-2xl border border-black/[0.08] text-left shadow-sm outline-none ring-apple-blue/25 transition-[box-shadow,transform] hover:-translate-y-0.5 hover:shadow-float focus-visible:ring-2"
+                        className="group relative flex min-h-[8rem] w-full min-w-0 cursor-pointer flex-col overflow-hidden rounded-[22px] border border-vault-border/60 text-left shadow-soft outline-none ring-vault-accent/25 card-lift hover:shadow-float focus-visible:ring-2"
                         style={noteCardSurfaceStyle(row.note.color)}
                       >
                         <div className="pointer-events-none absolute left-0 right-0 top-0 z-10 flex items-center justify-between gap-2 px-2 pt-2">
                           <button
                             type="button"
                             title="Bring to desktop"
-                            className="pointer-events-auto rounded-lg p-1.5 text-vault-text/75 transition hover:bg-black/[0.07] hover:text-apple-blue"
+                            className="pointer-events-auto rounded-lg p-1.5 text-vault-text/75 transition hover:bg-vault-accentSoft/50 hover:text-vault-accentDeep"
                             onClick={(e) => {
                               e.stopPropagation();
                               void (async () => {
@@ -2018,8 +2247,8 @@ export default function App() {
                             <button
                               type="button"
                               title={row.note.favorite ? "Remove from favorites" : "Add to favorites"}
-                              className={`pointer-events-auto rounded-lg p-1.5 transition hover:bg-black/[0.07] ${
-                                row.note.favorite ? "text-g-yellow" : "text-vault-text/55"
+                              className={`pointer-events-auto rounded-lg p-1.5 transition hover:bg-vault-accentSoft/50 ${
+                                row.note.favorite ? "text-vault-accentDeep" : "text-vault-text/55"
                               }`}
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -2044,8 +2273,8 @@ export default function App() {
                             <button
                               type="button"
                               title={vaultPinnedFront ? "Unpin vault from front" : "Pin vault in front of other apps"}
-                              className={`pointer-events-auto rounded-lg p-1.5 transition hover:bg-black/[0.07] ${
-                                vaultPinnedFront ? "text-apple-blue" : "text-vault-text/55"
+                              className={`pointer-events-auto rounded-lg p-1.5 transition hover:bg-vault-accentSoft/50 ${
+                                vaultPinnedFront ? "text-vault-accentDeep" : "text-vault-text/55"
                               }`}
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -2078,26 +2307,88 @@ export default function App() {
             </>
           ) : (
             <>
-              <header className="mb-6 flex flex-wrap items-center gap-4">
-                <h1
-                  key={`items-${categoryFilter ?? "all"}`}
-                  className="animate-vault-header min-w-[8rem] text-xl font-semibold tracking-tight"
-                >
-                  {headerTitle}
-                </h1>
+              {/* Anime Solarpunk Panoramic Banner */}
+              <div className="relative mb-6 overflow-hidden rounded-[26px] border border-slate-200/80 bg-white shadow-sm">
+                <div className="relative flex items-center h-44 w-full sm:h-52 lg:h-56 overflow-hidden px-6 sm:px-8">
+                  <img
+                    src={dashBannerArt}
+                    alt="Solarpunk Password Sanctuary"
+                    className="absolute inset-0 h-full w-full object-cover object-center pointer-events-none"
+                  />
+                  {/* Strong white gradient overlay from the left for high text contrast */}
+                  <div className="pointer-events-none absolute inset-0 w-full sm:w-[650px] bg-gradient-to-r from-white via-white/95 to-transparent z-10" />
+                  <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-white/60 to-transparent z-10" />
+
+                  {/* Floating Anime Header Content */}
+                  <div className="relative z-20 max-w-lg">
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-orange-500/15 border border-orange-500/25 px-2.5 py-0.5 text-[11px] font-bold text-orange-700 backdrop-blur-sm">
+                      ✦ Zero-Knowledge Vault
+                    </span>
+                    <h2 className="mt-2 text-2xl font-extrabold tracking-tight text-slate-950 sm:text-3xl">
+                      Passvault for idiots like us
+                    </h2>
+                    <p className="mt-1.5 text-xs sm:text-sm font-semibold text-slate-600 leading-snug">
+                      developer · handeled · Abhinav Silwal
+                    </p>
+                  </div>
+
+                  {/* Right Status Pill / Update Button */}
+                  <div className="absolute right-4 top-4 z-20 flex items-center gap-2">
+                    {updaterOffer && updaterPackaged !== false ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (
+                            updaterOffer &&
+                            updaterDownloadedVersion &&
+                            updaterDownloadedVersion === updaterOffer.version
+                          ) {
+                            void api.quitAndInstallUpdate?.();
+                          } else {
+                            setUpdaterModal("available");
+                          }
+                        }}
+                        className="inline-flex items-center gap-2 rounded-full bg-[#121212] hover:bg-black text-white px-3.5 py-1.5 text-xs font-semibold shadow-md transition active:scale-[0.98]"
+                      >
+                        <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                        <span>
+                          {updaterDownloadedVersion && updaterOffer && updaterDownloadedVersion === updaterOffer.version
+                            ? `Restart to update (${updaterOffer.version})`
+                            : `Update available (${updaterOffer.version})`}
+                        </span>
+                      </button>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-white/90 px-3 py-1 text-xs font-semibold text-emerald-700 shadow-sm backdrop-blur-md">
+                        <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                        Enclave Armed
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <header className="mb-6 flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <h1
+                    key={`items-${categoryFilter ?? "all"}`}
+                    className="font-sans text-[20px] font-bold tracking-tight text-slate-900"
+                  >
+                    {categoryFilter != null ? headerTitle : "All logins"}
+                  </h1>
+                </div>
                 <div className="flex min-w-[200px] flex-1 justify-end gap-3">
                   <input
                     value={search}
                     placeholder="Search apps, URLs, notes…"
                     onChange={(e) => setSearch(e.target.value)}
-                    className="min-w-[12rem] max-w-md flex-1 rounded-xl border border-black/[0.08] bg-white/90 px-4 py-2.5 text-sm text-vault-text shadow-sm outline-none ring-apple-blue/25 transition placeholder:text-vault-muted/80 focus:ring-2"
+                    className="w-full max-w-xs rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs text-slate-900 placeholder-slate-400 shadow-sm transition focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
                   />
                   <button
                     type="button"
-                    className="shrink-0 rounded-xl bg-apple-blue px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-apple-blue/20 transition hover:bg-[#0066d6]"
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-[#121212] hover:bg-black px-4 py-2 text-xs font-semibold text-white shadow-sm transition active:scale-[0.99]"
                     onClick={openAddCredential}
                   >
-                    Add password
+                    <span>+ Save a login</span>
                   </button>
                 </div>
               </header>
@@ -2152,7 +2443,7 @@ export default function App() {
               )}
             </>
           )}
-        </div>
+        </main>
       </div>
 
       {detailCred ? (
@@ -2210,31 +2501,40 @@ export default function App() {
       ) : null}
 
       {categoryModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 p-6 backdrop-blur-[2px]">
-          <div className="glass-modal w-full max-w-md rounded-[24px] p-8">
-            <div className="mb-2 text-lg font-semibold">New category</div>
-            <p className="mb-4 text-sm text-vault-muted">Unique name (e.g. Work, Finance).</p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/60 backdrop-blur-md"
+            aria-label="Dismiss"
+            onClick={() => setCategoryModal(false)}
+          />
+          <div className="glass-modal animate-vault-modal relative z-10 w-full max-w-md rounded-[28px] p-8">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Organize your library</div>
+            <div className="font-display mb-2 mt-2 text-2xl font-semibold tracking-tight text-slate-900">Create a category</div>
+            <p className="mb-6 text-sm leading-relaxed text-slate-600">Group related logins together so they stay effortless to find.</p>
+            <label className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Category name</label>
             <input
               value={newCatName}
-              placeholder="Category name"
+              placeholder="e.g. Work, Banking, Social"
               onChange={(e) => setNewCatName(e.target.value)}
-              className="w-full rounded-xl border border-black/[0.08] bg-white/90 px-4 py-3 text-sm outline-none ring-apple-blue/20 focus:ring-2"
+              className="vault-input mb-8"
               onKeyDown={(e) => e.key === "Enter" && addCategory()}
+              autoFocus
             />
-            <div className="mt-8 flex justify-end gap-3">
+            <div className="flex justify-end gap-3">
               <button
                 type="button"
-                className="rounded-xl px-5 py-2.5 text-sm font-medium text-vault-muted hover:bg-black/[0.04]"
+                className="rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-5 py-2.5 text-sm font-medium text-slate-700 transition"
                 onClick={() => setCategoryModal(false)}
               >
                 Cancel
               </button>
               <button
                 type="button"
-                className="rounded-xl bg-apple-blue px-5 py-2.5 text-sm font-semibold text-white"
+                className="rounded-xl bg-[#121212] hover:bg-black px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition active:scale-[0.98]"
                 onClick={() => void addCategory()}
               >
-                Add
+                Create category
               </button>
             </div>
           </div>
@@ -2283,32 +2583,40 @@ export default function App() {
       ) : null}
 
       {noteFolderModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 p-6 backdrop-blur-[2px]">
-          <div className="glass-modal w-full max-w-md rounded-[24px] p-8">
-            <div className="mb-2 text-lg font-semibold">New note folder</div>
-            <p className="mb-4 text-sm text-vault-muted">Unique name for grouping notes inside the vault.</p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/60 backdrop-blur-md"
+            aria-label="Dismiss"
+            onClick={() => setNoteFolderModal(false)}
+          />
+          <div className="glass-modal animate-vault-modal relative z-10 w-full max-w-md rounded-[28px] p-8">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-vault-accentDeep">Your note library</div>
+            <div className="font-display mb-2 mt-2 text-2xl font-semibold tracking-tight text-vault-text">Create a folder</div>
+            <p className="mb-6 text-sm leading-relaxed text-vault-muted">Give this collection a distinct name to keep your thoughts organised.</p>
+            <label className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.08em] text-vault-muted">Folder name</label>
             <input
               value={newNoteFolderName}
-              placeholder="Folder name"
+              placeholder="e.g. Recovery keys, Ideas, Project logs"
               onChange={(e) => setNewNoteFolderName(e.target.value)}
-              className="w-full rounded-xl border border-black/[0.08] bg-white/90 px-4 py-3 text-sm outline-none ring-apple-blue/25 focus:ring-2"
+              className="vault-input mb-8"
               onKeyDown={(e) => e.key === "Enter" && void addNoteFolder()}
               autoFocus
             />
-            <div className="mt-8 flex justify-end gap-3">
+            <div className="flex justify-end gap-3">
               <button
                 type="button"
-                className="rounded-xl px-5 py-2.5 text-sm font-medium text-vault-muted hover:bg-black/[0.04]"
+                className="rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-5 py-2.5 text-sm font-medium text-slate-700 transition"
                 onClick={() => setNoteFolderModal(false)}
               >
                 Cancel
               </button>
               <button
                 type="button"
-                className="rounded-xl bg-apple-blue px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-apple-blue/20 hover:bg-[#0066d6]"
+                className="rounded-xl bg-[#121212] hover:bg-black px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition active:scale-[0.98]"
                 onClick={() => void addNoteFolder()}
               >
-                Add
+                Create folder
               </button>
             </div>
           </div>
@@ -2316,34 +2624,42 @@ export default function App() {
       ) : null}
 
       {noteNameModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 p-6 backdrop-blur-[2px]">
-          <div className="glass-modal w-full max-w-md rounded-[24px] p-8">
-            <div className="mb-2 text-lg font-semibold">Name your note</div>
-            <p className="mb-4 text-sm text-vault-muted">
-              You can rename it anytime. Leave blank to use &quot;Untitled&quot;.
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/60 backdrop-blur-md"
+            aria-label="Dismiss"
+            onClick={() => setNoteNameModal(false)}
+          />
+          <div className="glass-modal animate-vault-modal relative z-10 w-full max-w-md rounded-[28px] p-8">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">A fresh private note</div>
+            <div className="font-display mb-2 mt-2 text-2xl font-semibold tracking-tight text-slate-900">What is this note about?</div>
+            <p className="mb-6 text-sm text-slate-600">
+              You can change this anytime. Leave blank to default to &quot;Untitled&quot;.
             </p>
+            <label className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Note title</label>
             <input
               value={newNoteTitleInput}
-              placeholder="Note name"
+              placeholder="e.g. Server emergency runbook"
               onChange={(e) => setNewNoteTitleInput(e.target.value)}
-              className="w-full rounded-xl border border-black/[0.08] bg-white/90 px-4 py-3 text-sm outline-none ring-apple-blue/25 focus:ring-2"
+              className="vault-input mb-8"
               onKeyDown={(e) => e.key === "Enter" && void createNoteFromModal()}
               autoFocus
             />
-            <div className="mt-8 flex justify-end gap-3">
+            <div className="flex justify-end gap-3">
               <button
                 type="button"
-                className="rounded-xl px-5 py-2.5 text-sm font-medium text-vault-muted hover:bg-black/[0.04]"
+                className="rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-5 py-2.5 text-sm font-medium text-slate-700 transition"
                 onClick={() => setNoteNameModal(false)}
               >
                 Cancel
               </button>
               <button
                 type="button"
-                className="rounded-xl bg-apple-blue px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-apple-blue/20 hover:bg-[#0066d6]"
+                className="rounded-xl bg-[#121212] hover:bg-black px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition active:scale-[0.98]"
                 onClick={() => void createNoteFromModal()}
               >
-                Create &amp; edit
+                Start writing
               </button>
             </div>
           </div>
@@ -2416,8 +2732,20 @@ export default function App() {
         />
       ) : null}
 
+      {typeof api?.setCompactMode === "function" ? (
+        <button
+          type="button"
+          title="Switch to compact mini vault"
+          aria-label="Switch to compact mini vault"
+          onClick={() => void setCompact(true)}
+          className="fixed bottom-6 right-6 z-40 flex h-11 w-11 items-center justify-center rounded-full bg-[#121212] text-white shadow-lg transition hover:bg-black active:scale-[0.94]"
+        >
+          <IconCompactDisplay />
+        </button>
+      ) : null}
+
       {toast ? (
-        <div className="pointer-events-none fixed bottom-8 left-1/2 z-[60] -translate-x-1/2 rounded-full border border-black/[0.06] bg-vault-text/90 px-5 py-2.5 text-sm font-medium text-white shadow-lg">
+        <div className="animate-vault-toast pointer-events-none fixed bottom-8 left-1/2 z-[60] -translate-x-1/2 rounded-full border border-vault-accent/30 bg-[#171c19]/95 px-5 py-2.5 text-sm font-medium text-vault-text shadow-float backdrop-blur-vault">
           {toast}
         </div>
       ) : null}
@@ -2514,10 +2842,10 @@ function DesktopOnlyNotepad({ note, onAutosaved }) {
   const padX = 14;
 
   return (
-    <div className="relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-[#f5f6f8]">
+    <div className="relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-vault-bg">
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-2">
         <div
-          className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-black/[0.08] shadow-inner"
+          className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-vault-border/60 shadow-inner"
           style={{ backgroundColor: pal.tint }}
         >
           <textarea
@@ -2530,8 +2858,8 @@ function DesktopOnlyNotepad({ note, onAutosaved }) {
             spellCheck={false}
             autoCorrect="off"
             autoCapitalize="sentences"
-            placeholder="Write on the lines…"
-            className="min-h-0 w-full min-w-0 flex-1 resize-none border-0 bg-transparent font-sans text-slate-800 outline-none [box-sizing:border-box] [font-feature-settings:'tnum'] placeholder:text-slate-400/65 focus:ring-0"
+            placeholder="Write on the parchment…"
+            className="min-h-0 w-full min-w-0 flex-1 resize-none border-0 bg-transparent font-sans text-vault-text outline-none [box-sizing:border-box] [font-feature-settings:'tnum'] placeholder:text-vault-muted/40 focus:ring-0"
             style={{
               fontSize: "14px",
               lineHeight: `${NOTE_LINE_PX}px`,
@@ -2550,7 +2878,7 @@ function DesktopOnlyNotepad({ note, onAutosaved }) {
   );
 }
 
-const FLOAT_NOTE_SUBTITLE = "Myvauld";
+const FLOAT_NOTE_SUBTITLE = "Myvault";
 
 function FloatNoteWindow({ noteId, syncBump, refreshNotes }) {
   const [phase, setPhase] = useState("loading");
@@ -2584,8 +2912,9 @@ function FloatNoteWindow({ noteId, syncBump, refreshNotes }) {
   if (phase === "loading") {
     return (
       <WindowShell title="Note" subtitle={FLOAT_NOTE_SUBTITLE}>
-        <div className="flex h-full min-h-0 flex-1 items-center justify-center bg-gradient-to-br from-[#f5f5f7] via-white to-[#eef3ff] font-sans text-vault-muted">
-          Loading note…
+        <div className="relative flex h-full min-h-0 flex-1 items-center justify-center bg-vault-bg font-sans text-vault-muted">
+          <Aurora />
+          <span className="relative z-10 text-xs font-medium">Opening note…</span>
         </div>
       </WindowShell>
     );
@@ -2594,15 +2923,19 @@ function FloatNoteWindow({ noteId, syncBump, refreshNotes }) {
   if (phase === "missing" || !note) {
     return (
       <WindowShell title="Note" subtitle={FLOAT_NOTE_SUBTITLE}>
-        <div className="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-4 bg-gradient-to-br from-[#f5f5f7] via-white to-[#eef3ff] p-8 font-sans">
-          <p className="text-sm font-medium text-vault-text">This note couldn’t be opened.</p>
-          <button
-            type="button"
-            className="rounded-xl bg-apple-blue px-6 py-2.5 text-sm font-semibold text-white shadow-md shadow-apple-blue/20 hover:bg-[#0066d6]"
-            onClick={() => void api.closeNoteFloatWindow()}
-          >
-            Close window
-          </button>
+        <div className="relative flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-4 bg-vault-bg p-8 font-sans">
+          <Aurora />
+          <div className="glass-modal relative z-10 flex max-w-sm flex-col items-center rounded-[28px] p-8 text-center">
+            <h3 className="font-display text-lg font-semibold text-vault-text">Note not found</h3>
+            <p className="mt-2 text-xs leading-relaxed text-vault-muted">This note may have been deleted or moved from another device.</p>
+            <button
+              type="button"
+              className="mt-6 rounded-xl bg-[#121212] hover:bg-black px-6 py-2 text-xs font-semibold text-white shadow-sm transition active:scale-[0.98]"
+              onClick={() => void api.closeNoteFloatWindow()}
+            >
+              Close window
+            </button>
+          </div>
         </div>
       </WindowShell>
     );
@@ -2610,7 +2943,7 @@ function FloatNoteWindow({ noteId, syncBump, refreshNotes }) {
 
   return (
     <WindowShell title={titleBarName} subtitle={FLOAT_NOTE_SUBTITLE}>
-      <div className="flex min-h-0 h-full min-w-0 flex-1 flex-col overflow-hidden">
+      <div className="flex min-h-0 h-full min-w-0 flex-1 flex-col overflow-hidden bg-vault-bg">
         <DesktopOnlyNotepad key={note.id} note={note} onAutosaved={refreshNotes} />
       </div>
     </WindowShell>
@@ -2744,15 +3077,15 @@ function VaultNoteEditorModal({
     <div className="fixed inset-0 z-[55] flex items-end justify-center overflow-y-auto sm:items-center sm:p-6">
       <button
         type="button"
-        className="absolute inset-0 bg-black/35 backdrop-blur-[2px]"
+        className="absolute inset-0 bg-black/60 backdrop-blur-md"
         aria-label="Close"
         onClick={() => void handleClose()}
       />
-      <div className="glass-modal relative z-10 flex max-h-[min(92dvh,880px)] w-full max-w-lg flex-col overflow-hidden rounded-t-[26px] p-0 sm:rounded-[26px]">
-        <div className="shrink-0 space-y-5 p-8 pb-0">
-          <div className="flex flex-wrap items-start justify-between gap-4">
+      <div className="glass-modal animate-vault-modal relative z-10 flex max-h-[min(92dvh,880px)] w-full max-w-xl flex-col overflow-hidden rounded-t-[28px] sm:rounded-[28px]">
+        <div className="shrink-0 border-b border-vault-border/50 p-7 pb-5">
+          <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="min-w-0 flex-1">
-              <div className="text-[11px] font-semibold uppercase tracking-wide text-vault-muted">Note title</div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-vault-accentDeep">Encrypted notepad</div>
               <input
                 value={title}
                 onChange={(e) => {
@@ -2760,7 +3093,7 @@ function VaultNoteEditorModal({
                   scheduleSave();
                 }}
                 onBlur={() => void saveImmediate()}
-                className="mt-2 w-full rounded-xl border border-black/[0.08] bg-white/95 px-4 py-2.5 text-[15px] font-semibold text-vault-text outline-none ring-apple-blue/25 focus:ring-2"
+                className="vault-input mt-1.5 font-display text-lg font-semibold"
                 placeholder="Untitled"
               />
             </div>
@@ -2768,108 +3101,111 @@ function VaultNoteEditorModal({
               type="button"
               title="Save and close"
               onClick={() => void handleClose()}
-              className="shrink-0 rounded-full border-0 bg-apple-green px-6 py-2.5 text-[13px] font-semibold text-white shadow-[0_0_20px_rgba(52,199,89,0.48)] hover:bg-[#2eb350] hover:shadow-[0_0_24px_rgba(52,199,89,0.58)] focus:outline-none focus-visible:ring-2 focus-visible:ring-apple-green/65"
+              className="shrink-0 rounded-xl bg-[#121212] hover:bg-black px-7 py-2.5 text-sm font-semibold text-white shadow-sm transition active:scale-[0.98]"
             >
               Done
             </button>
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-8 pb-2 pt-6">
-        <label className="block text-[11px] font-semibold uppercase tracking-wide text-vault-muted">Folder</label>
-        <select
-          className="mt-2 w-full cursor-pointer rounded-xl border border-black/[0.08] bg-white/95 px-4 py-2.5 text-sm outline-none ring-apple-blue/25 focus:ring-2"
-          value={String(folderId)}
-          onChange={(e) => {
-            const v = Number(e.target.value);
-            setFolderId(v);
-            scheduleSave();
-          }}
-        >
-          {folders.map((f) => (
-            <option key={f.id} value={String(f.id)}>
-              {f.name}
-            </option>
-          ))}
-        </select>
-
-        <label className="mt-5 flex cursor-pointer items-center gap-3 text-sm font-medium text-vault-text">
-          <input
-            type="checkbox"
-            checked={favorite}
-            onChange={(e) => {
-              setFavorite(e.target.checked);
-              scheduleSave();
-            }}
-            className="h-4 w-4 shrink-0 rounded border-black/20 accent-apple-blue"
-          />
-          <span>Add to favorites</span>
-        </label>
-
-        <div className="mt-5">
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-vault-muted">Paper color</div>
-          <div className="flex flex-wrap gap-2">
-            {NOTE_PALETTE.map((p, idx) => (
-              <button
-                key={String(idx)}
-                type="button"
-                title={`Color ${idx + 1}`}
-                onClick={() => {
-                  setColor(idx);
+        <div className="min-h-0 flex-1 overflow-y-auto p-7 pt-5">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="min-w-[140px] flex-1">
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.08em] text-vault-muted">Folder</label>
+              <select
+                className="vault-input"
+                value={String(folderId)}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  setFolderId(v);
                   scheduleSave();
                 }}
-                className={`h-9 w-9 rounded-full border-2 shadow-sm transition ${
-                  color === idx ? "border-apple-blue ring-2 ring-apple-blue/35" : "border-black/[0.08]"
-                }`}
-                style={{ backgroundColor: p.tint }}
+              >
+                {folders.map((f) => (
+                  <option key={f.id} value={String(f.id)}>
+                    {f.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <label className="mt-5 flex cursor-pointer items-center gap-2.5 text-xs font-medium text-vault-text">
+              <input
+                type="checkbox"
+                checked={favorite}
+                onChange={(e) => {
+                  setFavorite(e.target.checked);
+                  scheduleSave();
+                }}
+                className="h-4 w-4 shrink-0 rounded border-vault-border/40 accent-vault-accent"
               />
-            ))}
+              <span>Star as favorite</span>
+            </label>
+          </div>
+
+          <div className="mt-5">
+            <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-vault-muted">Paper tint</div>
+            <div className="flex flex-wrap gap-2.5">
+              {NOTE_PALETTE.map((p, idx) => (
+                <button
+                  key={String(idx)}
+                  type="button"
+                  title={`Tint ${idx + 1}`}
+                  onClick={() => {
+                    setColor(idx);
+                    scheduleSave();
+                  }}
+                  className={`h-8 w-8 rounded-full border-2 transition-transform duration-150 ${
+                    color === idx ? "border-vault-accent ring-2 ring-vault-accent/40 scale-110" : "border-vault-border/60 hover:scale-105"
+                  }`}
+                  style={{ backgroundColor: p.tint }}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-5 flex min-h-0 min-w-0 flex-1 flex-col">
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-vault-muted">
+                Ruled parchment
+              </span>
+              <span className="text-[10px] text-vault-muted/60">Auto-saves continuously · ⌘S</span>
+            </div>
+            <div
+              className="flex min-h-[min(48vh,420px)] flex-1 flex-col overflow-hidden rounded-2xl border border-vault-border/70 shadow-inner"
+              style={{ backgroundColor: pal.tint }}
+            >
+              <textarea
+                value={body}
+                onChange={(e) => {
+                  setBody(e.target.value);
+                  scheduleSave();
+                }}
+                onBlur={() => void saveImmediate()}
+                spellCheck={false}
+                autoCorrect="off"
+                placeholder="Write your private notes here..."
+                className="min-h-0 w-full min-w-0 flex-1 resize-y border-0 bg-transparent font-sans text-vault-text outline-none [box-sizing:border-box] placeholder:text-vault-muted/40 focus:ring-0"
+                style={{
+                  fontSize: "14px",
+                  lineHeight: `${NOTE_LINE_PX}px`,
+                  padding: `${padTopWriting}px ${padXWriting}px ${padTopWriting + 2}px`,
+                  backgroundImage: `repeating-linear-gradient(transparent, transparent ${
+                    NOTE_LINE_PX - 1
+                  }px, ${pal.line} ${NOTE_LINE_PX - 1}px, ${pal.line} ${NOTE_LINE_PX}px)`,
+                  backgroundSize: `100% ${NOTE_LINE_PX}px`,
+                  backgroundAttachment: "local",
+                }}
+              />
+            </div>
           </div>
         </div>
 
-        <div className="mt-6 flex min-h-0 min-w-0 flex-1 flex-col">
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
-            Writing
-          </div>
-          <div
-            className="flex min-h-[min(48vh,420px)] flex-1 flex-col overflow-hidden rounded-2xl border border-black/[0.06] shadow-inner"
-            style={{ backgroundColor: pal.tint }}
-          >
-            <textarea
-              value={body}
-              onChange={(e) => {
-                setBody(e.target.value);
-                scheduleSave();
-              }}
-              onBlur={() => void saveImmediate()}
-              spellCheck={false}
-              autoCorrect="off"
-              placeholder="Only type on the ruled lines..."
-              className="min-h-0 w-full min-w-0 flex-1 resize-y border-0 bg-transparent font-sans text-slate-800 outline-none [box-sizing:border-box] placeholder:text-slate-400/70 focus:ring-0"
-              style={{
-                fontSize: "14px",
-                lineHeight: `${NOTE_LINE_PX}px`,
-                padding: `${padTopWriting}px ${padXWriting}px ${padTopWriting + 2}px`,
-                backgroundImage: `repeating-linear-gradient(transparent, transparent ${
-                  NOTE_LINE_PX - 1
-                }px, ${pal.line} ${NOTE_LINE_PX - 1}px, ${pal.line} ${NOTE_LINE_PX}px)`,
-                backgroundSize: `100% ${NOTE_LINE_PX}px`,
-                backgroundAttachment: "local",
-              }}
-            />
-          </div>
-          <p className="mt-2 text-[11px] text-vault-muted">
-            Saves continuously while typing (Electron IPC). ⌘S / Ctrl+S saves now. Stored encrypted in SQLite with
-            your vault.
-          </p>
-        </div>
-        </div>
-
-        <div className="shrink-0 border-t border-black/[0.06] px-8 py-5">
+        <div className="shrink-0 border-t border-vault-border/50 px-7 py-4">
           <div className="flex justify-end">
             <button
               type="button"
-              className="rounded-xl px-4 py-2.5 text-sm font-semibold text-apple-red hover:bg-red-500/10"
+              className="btn-danger px-5 py-2 text-xs"
               onClick={() => onDeleteRequest?.()}
             >
               Delete note
@@ -2881,29 +3217,59 @@ function VaultNoteEditorModal({
   );
 }
 
-function LogoMark({ className = "" }) {
+function LogoMark({ className = "h-8 w-8" }) {
   return (
-    <img
-      src={BRAND_LOGO_SRC}
-      alt=""
-      draggable={false}
-      className={`aspect-square shrink-0 select-none object-cover shadow-sm ${className} rounded-[23%]`}
-      aria-hidden
-    />
+    <span className={`inline-flex shrink-0 items-center justify-center select-none ${className}`} aria-hidden>
+      <svg viewBox="0 0 32 32" fill="none" className="h-full w-full">
+        <defs>
+          <linearGradient id="mv-logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#fb923c" />
+            <stop offset="50%" stopColor="#f97316" />
+            <stop offset="100%" stopColor="#ea580c" />
+          </linearGradient>
+          <filter id="mv-logo-shadow" x="-20%" y="-20%" width="140%" height="140%">
+            <feDropShadow dx="0" dy="1" stdDeviation="1.2" floodColor="#c2410c" floodOpacity="0.32" />
+          </filter>
+        </defs>
+        <g filter="url(#mv-logo-shadow)">
+          {/* 6-petal anime solarpunk flower emblem */}
+          <path
+            d="M16 2.8C16.8 7.6 18.5 10 23.5 10.8C18.5 11.6 16.8 14 16 18.8C15.2 14 13.5 11.6 8.5 10.8C13.5 10 15.2 7.6 16 2.8Z"
+            fill="url(#mv-logo-grad)"
+          />
+          <path
+            d="M23.5 10.8C22.6 15.6 24.1 18.2 28.5 20.6C23.8 21.4 21.4 23.8 20.6 28.5C19.8 23.8 17.4 21.4 12.7 20.6C17.1 18.2 18.6 15.6 17.8 10.8C20.5 13.1 21.5 13.1 23.5 10.8Z"
+            fill="url(#mv-logo-grad)"
+            opacity="0.9"
+          />
+          <path
+            d="M8.5 10.8C11.2 13.1 12.2 13.1 14.9 10.8C14.1 15.6 15.6 18.2 20 20.6C15.3 21.4 12.9 23.8 12.1 28.5C11.3 23.8 8.9 21.4 4.2 20.6C8.6 18.2 10.1 15.6 9.3 10.8"
+            fill="url(#mv-logo-grad)"
+            opacity="0.8"
+          />
+          <circle cx="16" cy="16" r="3" fill="#ffffff" />
+          <circle cx="16" cy="16" r="1.5" fill="#ea580c" />
+        </g>
+      </svg>
+    </span>
   );
 }
 
-function RailIconButton({ children, title, active, onClick }) {
+function RailIconButton({ children, title, label, active, onClick }) {
   return (
     <button
       type="button"
       title={title}
       onClick={onClick}
-      className={`mb-2 flex h-11 w-11 items-center justify-center rounded-xl transition-colors duration-200 ${
-        active ? "text-apple-blue" : "text-vault-muted hover:text-vault-text/85"
+      aria-current={active ? "page" : undefined}
+      className={`mb-1 flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left transition-all duration-200 ease-vault ${
+        active
+          ? "bg-vault-accent font-semibold text-[#12100a] shadow-brass"
+          : "text-vault-muted hover:-translate-y-0.5 hover:bg-vault-accentSoft/55 hover:text-vault-accentDeep"
       }`}
     >
       {children}
+      <span className="rail-label text-[13px] font-semibold">{label || title}</span>
     </button>
   );
 }
@@ -2984,6 +3350,221 @@ function IconMonitorSmall({ className = "" }) {
   );
 }
 
+function IconCompactDisplay() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="2.5" y="3.5" width="19" height="14" rx="2.5" />
+      <rect x="12.5" y="9" width="6.5" height="6" rx="1.2" fill="currentColor" stroke="none" />
+      <path d="M8 21h8" />
+    </svg>
+  );
+}
+
+function IconExpandWindow() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="shrink-0">
+      <path d="M7 2h3v3" />
+      <path d="M10 2 6.5 5.5" />
+      <path d="M5 10H2V7" />
+      <path d="M2 10l3.5-3.5" />
+    </svg>
+  );
+}
+
+function IconSearchSmall() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
+    </svg>
+  );
+}
+
+/** Compact always-available vault: drag a card into any browser password field to fill it. */
+const DROP_AUTOFILL_MESSAGES = {
+  "not-dropped-on-field": "Drop onto the username box to fill",
+  "dropped-on-password-field": "Drop onto the username box, not the password box",
+  "next-field-not-password": "Username filled — password field not found, click it and drop again",
+  "could-not-focus-window": "Couldn't reach that window — click it once and retry",
+};
+
+function MiniVault({
+  items,
+  pinned,
+  collapsed,
+  onCollapse,
+  onRestore,
+  onTogglePin,
+  onExpand,
+  onCopy,
+  onNotify,
+  toast,
+}) {
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+
+  const rows = useMemo(() => {
+    const favoritesThenRecent = (a, b) =>
+      Number(!!b.favorite) - Number(!!a.favorite) ||
+      String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""));
+    const matches = q
+      ? items.filter((i) => String(i.title || hostFromUrl(i.url) || "").toLowerCase().includes(q))
+      : [...items];
+    return matches.sort(favoritesThenRecent);
+  }, [items, q]);
+
+  const handleDragStart = (e, entry) => {
+    e.dataTransfer.effectAllowed = "copy";
+    e.dataTransfer.setData("text/plain", entry.username || entry.password || "");
+    const ghost = document.createElement("div");
+    ghost.textContent = entry.title || hostFromUrl(entry.url) || "Login";
+    ghost.style.cssText =
+      "position:fixed;top:-200px;left:-200px;padding:6px 12px;border-radius:10px;background:#121212;color:#fff;font:600 12px system-ui,sans-serif;box-shadow:0 6px 18px rgba(0,0,0,.25);white-space:nowrap;";
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, 14, 14);
+    setTimeout(() => ghost.remove(), 0);
+    void api.pingActivity();
+  };
+
+  // Username was dropped into the browser field; the app now overwrites it and types the password.
+  const handleDragEnd = (e, entry) => {
+    if (e.dataTransfer.dropEffect === "none") return;
+    if (!entry.username || !entry.password) return;
+    void (async () => {
+      const r = await api.autofillAfterDrop?.({ username: entry.username, password: entry.password });
+      if (r && !r.ok && DROP_AUTOFILL_MESSAGES[r.reason]) onNotify(DROP_AUTOFILL_MESSAGES[r.reason]);
+    })();
+  };
+
+  const fadeWhenCollapsed = `transition-opacity duration-200 ${
+    collapsed ? "pointer-events-none opacity-0" : "opacity-100"
+  }`;
+
+  const ctrlBtn =
+    "flex h-7 w-7 items-center justify-center rounded-full bg-white/85 text-slate-600 shadow-sm backdrop-blur transition hover:bg-slate-100 hover:text-slate-900 active:scale-[0.94]";
+
+  return (
+    <div className="relative flex h-screen flex-col overflow-hidden rounded-[14px] border border-slate-200/90 bg-white font-sans text-slate-900">
+      <div className="relative shrink-0 overflow-hidden pb-4">
+      <img
+        src={dashBannerArt}
+        alt=""
+        draggable={false}
+        className="pointer-events-none absolute inset-0 h-full w-full object-cover object-center"
+      />
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-white via-white/70 to-white/20" />
+      <div className="relative px-4 pt-[10px]" style={{ WebkitAppRegion: "drag" }}>
+        <div className="flex items-center justify-end">
+          <div className="flex shrink-0 items-center gap-1.5" style={{ WebkitAppRegion: "no-drag" }}>
+            <button
+              type="button"
+              title={collapsed ? "Open mini vault" : "Collapse to bar"}
+              aria-label={collapsed ? "Open mini vault" : "Collapse to bar"}
+              className={ctrlBtn}
+              onClick={collapsed ? onRestore : onCollapse}
+            >
+              {collapsed ? <IconTitleMaximize /> : <IconTitleMinimize />}
+            </button>
+            <button
+              type="button"
+              title={pinned ? "Unpin from top" : "Pin on top of other apps"}
+              aria-label={pinned ? "Unpin from top" : "Pin on top of other apps"}
+              aria-pressed={pinned}
+              className={`${ctrlBtn} ${pinned ? "!bg-[#121212] !text-white" : ""}`}
+              onClick={onTogglePin}
+            >
+              <IconPinSmall filled={pinned} />
+            </button>
+            <button type="button" title="Expand to full vault" aria-label="Expand to full vault" className={ctrlBtn} onClick={onExpand}>
+              <IconExpandWindow />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className={`relative px-4 pt-6 ${fadeWhenCollapsed}`}>
+        <div className="relative">
+          {!query ? (
+            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
+              <IconSearchSmall />
+            </span>
+          ) : null}
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search by title…"
+            aria-label="Search logins by title"
+            className={`w-full rounded-xl border border-slate-200 bg-white py-2 pr-3 text-sm text-slate-900 placeholder-slate-400 shadow-sm transition focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900/10 ${
+              query ? "pl-3" : "pl-9"
+            }`}
+          />
+        </div>
+      </div>
+      </div>
+
+      <div className={`shrink-0 px-4 pb-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400 ${fadeWhenCollapsed}`}>
+        {q ? `${rows.length} match${rows.length === 1 ? "" : "es"}` : "All logins"}
+      </div>
+
+      <div data-lenis-prevent className={`min-h-0 flex-1 space-y-1.5 overflow-y-auto px-4 pb-4 ${fadeWhenCollapsed}`}>
+        {rows.length === 0 ? (
+          <p className="px-1 pt-6 text-center text-xs leading-relaxed text-slate-400">
+            {q ? "No login with that title." : "No logins saved yet."}
+          </p>
+        ) : (
+          rows.map((entry) => (
+            <div
+              key={entry.id}
+              role="button"
+              tabIndex={0}
+              draggable
+              onDragStart={(e) => handleDragStart(e, entry)}
+              onDragEnd={(e) => handleDragEnd(e, entry)}
+              onClick={() => onCopy(entry)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onCopy(entry);
+                }
+              }}
+              title="Drag into a password field, or click to copy"
+              className="relative flex cursor-grab items-center gap-2 rounded-xl border border-slate-200/90 bg-white px-3 py-1.5 shadow-sm transition hover:border-slate-300 hover:shadow-md active:cursor-grabbing"
+            >
+              {entry.favorite ? (
+                <span title="Favorite" aria-label="Favorite" className="absolute right-2 top-1.5 text-amber-500">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                    <path d="M12 2.5l2.9 5.9 6.5.9-4.7 4.6 1.1 6.5L12 17.3l-5.8 3.1 1.1-6.5-4.7-4.6 6.5-.9z" />
+                  </svg>
+                </span>
+              ) : null}
+              <div className={`min-w-0 flex-1 ${entry.favorite ? "pr-4" : ""}`}>
+                <div className="truncate text-[13px] font-semibold leading-tight text-slate-900">
+                  {entry.title || hostFromUrl(entry.url) || "Login"}
+                </div>
+                <div className="mt-0.5 flex items-center gap-1.5 text-[11px] leading-tight text-slate-500">
+                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+                  <span className="truncate">{entry.username || "No username"}</span>
+                </div>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div
+        aria-hidden
+        className={`pointer-events-none absolute bottom-1 left-1/2 h-1 w-9 -translate-x-1/2 rounded-full bg-slate-300/90 ${fadeWhenCollapsed}`}
+      />
+
+      {toast ? (
+        <div className="pointer-events-none fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-full bg-[#121212] px-4 py-2 text-xs font-medium text-white shadow-lg">
+          {toast}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /** Push-pin / thumbtack — office pin, not a map location marker */
 function IconPinSmall({ filled = false }) {
   return (
@@ -3016,40 +3597,99 @@ function IconPinSmall({ filled = false }) {
 
 function IconCopyRounded() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <rect x="9" y="9" width="11" height="11" rx="2" />
-      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" strokeLinecap="round" />
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
     </svg>
   );
 }
 
-function CredCard({ entry, onOpen, onToggleFav, onCopyUsername, onCopyPassword }) {
-  const [copyMenuOpen, setCopyMenuOpen] = useState(false);
-  const copyWrapRef = useRef(null);
+function IconCheckSmall() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  );
+}
 
-  const host = hostFromUrl(entry.url);
-  const updated = entry.updatedAt
-    ? new Date(entry.updatedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })
-    : "";
+function IconUserSmall() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+      <circle cx="12" cy="7" r="4" />
+    </svg>
+  );
+}
+
+function IconKeySmall() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M21 2l-2 2m-1.5 1.5L16 7l-2-2-1.5 1.5 2 2-3 3a6 6 0 1 1-2.83-2.83l8.33-8.33z" />
+    </svg>
+  );
+}
+
+function IconGlobeSmall() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="12" cy="12" r="10" />
+      <line x1="2" y1="12" x2="22" y2="12" />
+      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+    </svg>
+  );
+}
+
+function getServicePalette(name = "") {
+  const palettes = [
+    { bg: "bg-blue-500/10", border: "border-blue-500/25", text: "text-blue-600", dot: "bg-blue-500" },
+    { bg: "bg-emerald-500/10", border: "border-emerald-500/25", text: "text-emerald-600", dot: "bg-emerald-500" },
+    { bg: "bg-amber-500/10", border: "border-amber-500/25", text: "text-amber-600", dot: "bg-amber-500" },
+    { bg: "bg-violet-500/10", border: "border-violet-500/25", text: "text-violet-600", dot: "bg-violet-500" },
+    { bg: "bg-rose-500/10", border: "border-rose-500/25", text: "text-rose-600", dot: "bg-rose-500" },
+    { bg: "bg-cyan-500/10", border: "border-cyan-500/25", text: "text-cyan-600", dot: "bg-cyan-500" },
+    { bg: "bg-indigo-500/10", border: "border-indigo-500/25", text: "text-indigo-600", dot: "bg-indigo-500" },
+  ];
+  let h = 0;
+  for (let i = 0; i < (name || "").length; i++) h = (h << 5) - h + name.charCodeAt(i);
+  return palettes[Math.abs(h) % palettes.length];
+}
+
+function CredCard({ entry, onOpen, onToggleFav, onCopyUsername, onCopyPassword }) {
+  const [copiedUser, setCopiedUser] = useState(false);
+  const [copiedPw, setCopiedPw] = useState(false);
+
+  const displayName = formatDisplayName(entry);
+  const timeAgo = formatRelativeTime(entry.updatedAt);
 
   const hasUsername = String(entry.username ?? "").trim().length > 0;
   const hasPassword = Boolean(entry.password);
 
-  useEffect(() => {
-    if (!copyMenuOpen) return undefined;
-    const onDoc = (ev) => {
-      if (copyWrapRef.current && !copyWrapRef.current.contains(ev.target)) {
-        setCopyMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [copyMenuOpen]);
+  const initial = (displayName.charAt(0) || "P").toUpperCase();
+
+  const handleCopyUser = (e) => {
+    e.stopPropagation();
+    if (!hasUsername) return;
+    onCopyUsername(e);
+    setCopiedUser(true);
+    setTimeout(() => setCopiedUser(false), 1800);
+  };
+
+  const handleCopyPw = (e) => {
+    e.stopPropagation();
+    if (!hasPassword) return;
+    onCopyPassword(e);
+    setCopiedPw(true);
+    setTimeout(() => setCopiedPw(false), 1800);
+  };
 
   return (
-    <div
+    <motion.div
       role="button"
       tabIndex={0}
+      initial={{ opacity: 0, y: 14 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true, margin: "-20px" }}
+      transition={{ duration: 0.35, ease: [0.25, 0.8, 0.25, 1] }}
       onClick={onOpen}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
@@ -3057,122 +3697,99 @@ function CredCard({ entry, onOpen, onToggleFav, onCopyUsername, onCopyPassword }
           onOpen();
         }
       }}
-      className="glass-panel group flex w-full cursor-pointer flex-col rounded-2xl p-4 text-left outline-none ring-apple-blue/40 transition-[box-shadow,transform] duration-300 hover:-translate-y-0.5 hover:shadow-float focus-visible:ring-2"
+      className="group relative flex w-full cursor-pointer flex-col overflow-hidden rounded-[20px] border border-slate-200/80 bg-white shadow-sm transition-all duration-200 hover:-translate-y-1 hover:border-slate-300 hover:shadow-md outline-none"
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-[15px] font-semibold leading-snug text-vault-text">
-            {entry.title || "Login"}
+      {/* Top Graphic Canvas with subtle Dot Grid matching Screenshot 2 */}
+      <div className="relative flex h-36 w-full items-center justify-center border-b border-slate-100 bg-[#f8fafc] bg-dots">
+        {/* Star Button Top-Right */}
+        <button
+          type="button"
+          title={entry.favorite ? "Remove from favorites" : "Add to favorites"}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleFav(e);
+          }}
+          className={`absolute right-2.5 top-2.5 rounded-lg p-1.5 transition-all ${
+            entry.favorite
+              ? "text-amber-500 bg-amber-50"
+              : "text-slate-400 opacity-0 group-hover:opacity-100 hover:bg-slate-200/60 hover:text-slate-700"
+          }`}
+        >
+          <svg width="17" height="17" viewBox="0 0 24 24" fill={entry.favorite ? "currentColor" : "none"} stroke="currentColor" strokeWidth={entry.favorite ? "0" : "1.8"}>
+            <path d="M12 3.2c.35 0 .67.2.83.51l1.88 3.82 4.2.61c.92.13 1.29 1.27.62 1.92l-3.04 2.97.72 4.19c.16.92-.8 1.62-1.62 1.34L12 16.9l-3.76 1.98c-.82.27-1.78-.42-1.62-1.34l.72-4.19-3.04-2.97c-.67-.65-.3-1.79.62-1.92l4.2-.61 1.88-3.82c.16-.31.48-.51.83-.51z" />
+          </svg>
+        </button>
+
+        {/* Centered Floating Pill matching Screenshot 2 */}
+        <div className="flex items-center gap-3 rounded-2xl border border-slate-200/90 bg-white/95 px-4 py-2.5 shadow-sm transition-transform duration-200 group-hover:scale-105">
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-xs font-bold text-white shadow-sm">
+            {initial}
           </div>
-          <div className="mt-1 truncate text-[12px] text-vault-muted">
-            {host || "No URL"} · {entry.username || "—"}
+          <div className="min-w-0 pr-1">
+            <div className="truncate max-w-[130px] text-xs font-semibold text-slate-800">
+              {displayName}
+            </div>
+            <div className="flex items-center gap-1.5 text-[10px] font-medium text-emerald-600">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              Protected
+            </div>
           </div>
-          {entry.notes?.trim() ? (
-            <p className="mt-2 line-clamp-3 text-[12px] leading-snug text-[#1b7f3a]">
-              {truncateNote(entry.notes.trim(), 160)}
-            </p>
-          ) : null}
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+
+        {/* Hover Quick Action Buttons */}
+        <div className="absolute inset-x-3 bottom-2 flex items-center justify-between opacity-0 transition-opacity duration-200 group-hover:opacity-100">
           <button
             type="button"
-            title={entry.favorite ? "Remove from favorites" : "Add to favorites"}
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleFav(e);
-            }}
-            className={`rounded-full p-1.5 transition hover:bg-black/[0.05] ${
-              entry.favorite ? "text-g-yellow" : "text-vault-muted"
-            }`}
+            disabled={!hasUsername}
+            onClick={handleCopyUser}
+            className="flex items-center gap-1 rounded-lg bg-white/90 px-2.5 py-1 text-[11px] font-medium text-slate-700 shadow-sm backdrop-blur-sm hover:bg-slate-900 hover:text-white transition disabled:opacity-40"
           >
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" className="drop-shadow-sm">
-              <path d="M12 3.2c.35 0 .67.2.83.51l1.88 3.82 4.2.61c.92.13 1.29 1.27.62 1.92l-3.04 2.97.72 4.19c.16.92-.8 1.62-1.62 1.34L12 16.9l-3.76 1.98c-.82.27-1.78-.42-1.62-1.34l.72-4.19-3.04-2.97c-.67-.65-.3-1.79.62-1.92l4.2-.61 1.88-3.82c.16-.31.48-.51.83-.51z" />
-            </svg>
+            {copiedUser ? <IconCheckSmall /> : <IconCopyRounded />}
+            <span>{copiedUser ? "Copied" : "User"}</span>
           </button>
-          <div ref={copyWrapRef} className="relative flex items-center">
-            <button
-              type="button"
-              title="Copy username or password"
-              disabled={!hasUsername && !hasPassword}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (!hasUsername && !hasPassword) return;
-                setCopyMenuOpen((o) => !o);
-              }}
-              className={`rounded-full p-1.5 text-apple-blue transition hover:bg-apple-blue/10 disabled:cursor-not-allowed disabled:opacity-35 ${
-                copyMenuOpen ? "bg-apple-blue/15" : ""
-              }`}
-              aria-expanded={copyMenuOpen}
-              aria-haspopup="menu"
-            >
-              <IconCopyRounded />
-            </button>
-            {copyMenuOpen ? (
-              <div
-                role="menu"
-                className="absolute right-0 top-full z-[70] mt-1 min-w-[11rem] overflow-hidden rounded-xl border border-black/[0.08] bg-white py-1 shadow-lg"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <button
-                  type="button"
-                  role="menuitem"
-                  disabled={!hasUsername}
-                  className="flex w-full px-3 py-2 text-left text-[13px] font-medium text-vault-text transition hover:bg-black/[0.05] disabled:cursor-not-allowed disabled:opacity-35"
-                  onClick={(e) => {
-                    setCopyMenuOpen(false);
-                    onCopyUsername(e);
-                  }}
-                >
-                  Copy username
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  disabled={!hasPassword}
-                  className="flex w-full px-3 py-2 text-left text-[13px] font-medium text-vault-text transition hover:bg-black/[0.05] disabled:cursor-not-allowed disabled:opacity-35"
-                  onClick={(e) => {
-                    setCopyMenuOpen(false);
-                    onCopyPassword(e);
-                  }}
-                >
-                  Copy password
-                </button>
-              </div>
-            ) : null}
-          </div>
+          <button
+            type="button"
+            disabled={!hasPassword}
+            onClick={handleCopyPw}
+            className="flex items-center gap-1 rounded-lg bg-white/90 px-2.5 py-1 text-[11px] font-medium text-slate-700 shadow-sm backdrop-blur-sm hover:bg-slate-900 hover:text-white transition disabled:opacity-40"
+          >
+            {copiedPw ? <IconCheckSmall /> : <IconKeySmall />}
+            <span>{copiedPw ? "Copied" : "Password"}</span>
+          </button>
         </div>
       </div>
-      {(entry.categoryName || updated) ? (
-        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-black/[0.06] pt-3">
-          {entry.categoryName ? (
-            <span className="rounded-full bg-black/[0.04] px-2.5 py-0.5 text-[11px] font-medium text-vault-muted">
-              {entry.categoryName}
-            </span>
-          ) : null}
-          {updated ? (
-            <span className="text-[11px] text-vault-muted/80">Updated {updated}</span>
-          ) : null}
+
+      {/* Bottom Status Bar showing sensible card metadata */}
+      <div className="flex items-center justify-between px-4 py-2.5 bg-white text-xs border-t border-slate-100">
+        <div className="flex min-w-0 items-center gap-1.5 text-slate-500">
+          <IconGlobeSmall />
+          <span className="truncate text-[11px] font-medium text-slate-600">
+            {hostFromUrl(entry.url) || (hasUsername ? entry.username : "Personal login")}
+          </span>
         </div>
-      ) : null}
-    </div>
+        <div className="shrink-0 text-[11px] font-medium text-slate-400">
+          {timeAgo}
+        </div>
+      </div>
+    </motion.div>
   );
 }
 
 function EmptyVaultState({ onAdd }) {
   return (
-    <div className="glass-panel mx-auto mt-8 flex max-w-lg flex-col items-center rounded-[28px] px-10 py-16 text-center">
-      <LogoMark className="h-16 w-16" />
-      <h2 className="mt-6 text-lg font-semibold text-vault-text">Your vault is ready</h2>
-      <p className="mt-3 max-w-sm text-sm leading-relaxed text-vault-muted">
-        Save app names, logins, and secure notes. Use categories on the left and favorites for
-        everyday sites.
+    <div className="glass-panel mx-auto mt-8 flex max-w-lg flex-col items-center rounded-[32px] px-10 py-16 text-center">
+      <LogoMark className="h-16 w-16 shadow-soft" />
+      <div className="mt-5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Your private space is ready</div>
+      <h2 className="font-display mt-2 text-2xl font-semibold tracking-tight text-slate-900">Start with the login you use most.</h2>
+      <p className="mt-3 max-w-sm text-sm leading-relaxed text-slate-600">
+        Save a password or note, then let categories and favorites make the rest easy to find.
       </p>
       <button
         type="button"
         onClick={onAdd}
-        className="mt-8 rounded-xl bg-apple-blue px-8 py-3 text-sm font-semibold text-white shadow-lg shadow-apple-blue/25"
+        className="mt-8 rounded-2xl bg-[#121212] hover:bg-black px-8 py-3.5 text-sm font-bold text-white shadow-md transition active:scale-[0.98]"
       >
-        Add your first password
+        Save my first login
       </button>
     </div>
   );
@@ -3184,7 +3801,7 @@ function GlassConfirmDeleteModal({ kind, itemTitle, itemSubtitle, onCancel, onCo
     <div className="fixed inset-0 z-[70] flex items-center justify-center p-5 sm:p-8">
       <button
         type="button"
-        className="absolute inset-0 bg-black/40 backdrop-blur-md"
+        className="absolute inset-0 bg-black/60 backdrop-blur-md"
         aria-label="Cancel"
         onClick={onCancel}
       />
@@ -3192,34 +3809,37 @@ function GlassConfirmDeleteModal({ kind, itemTitle, itemSubtitle, onCancel, onCo
         role="dialog"
         aria-modal="true"
         aria-labelledby="del-confirm-title"
-        className="glass-modal relative z-10 w-full max-w-[420px] rounded-[22px] border border-white/35 bg-white/[0.72] p-8 shadow-[0_32px_120px_rgba(0,0,0,0.18)] backdrop-blur-xl"
+        className="glass-modal animate-vault-modal relative z-10 w-full max-w-[440px] rounded-[28px] p-8"
       >
-        <h2 id="del-confirm-title" className="text-lg font-semibold tracking-tight text-vault-text">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-vault-danger">Permanent deletion</div>
+        <h2 id="del-confirm-title" className="font-display mt-2 text-2xl font-semibold tracking-tight text-vault-text">
           {isNote ? "Delete this note?" : "Delete this login?"}
         </h2>
-        <p className="mt-4 text-[16px] font-semibold leading-snug text-vault-text">{itemTitle}</p>
-        {!isNote && itemSubtitle ? (
-          <p className="mt-1.5 text-[13px] font-medium text-vault-muted">{itemSubtitle}</p>
-        ) : null}
-        <p className="mt-5 text-sm leading-relaxed text-vault-muted">
+        <div className="mt-4 rounded-2xl border border-vault-border/60 bg-vault-surfaceElevated/60 p-4">
+          <p className="text-[15px] font-semibold leading-snug text-vault-text">{itemTitle}</p>
+          {!isNote && itemSubtitle ? (
+            <p className="mt-1 text-[12px] text-vault-muted font-mono">{itemSubtitle}</p>
+          ) : null}
+        </div>
+        <p className="mt-4 text-[13px] leading-relaxed text-vault-muted">
           {isNote
-            ? "This notepad will be removed from your vault permanently."
-            : "This password entry will be removed from your vault permanently."}
+            ? "This note will be permanently erased from your encrypted local storage."
+            : "This login will be permanently removed from your zero-knowledge archive."}
         </p>
         <div className="mt-8 flex flex-wrap justify-end gap-3">
           <button
             type="button"
-            className="rounded-xl px-5 py-2.5 text-sm font-medium text-vault-muted transition hover:bg-black/[0.05]"
+            className="rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-5 py-2.5 text-sm font-medium text-slate-700 transition"
             onClick={onCancel}
           >
-            Cancel
+            Keep it
           </button>
           <button
             type="button"
-            className="rounded-xl bg-apple-red px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-red-500/20 transition hover:bg-red-600"
+            className="rounded-xl bg-rose-600 hover:bg-rose-700 px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition active:scale-[0.98]"
             onClick={onConfirm}
           >
-            Delete
+            Delete permanently
           </button>
         </div>
       </div>
@@ -3249,66 +3869,66 @@ function GlassDetailModal({
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-6">
       <button
         type="button"
-        className="absolute inset-0 bg-black/30 backdrop-blur-[2px]"
+        className="absolute inset-0 bg-black/60 backdrop-blur-md"
         aria-label="Close"
         onClick={onClose}
       />
-      <div className="glass-modal relative z-10 w-full max-w-lg rounded-t-[28px] p-8 sm:rounded-[28px]">
+      <div className="glass-modal animate-vault-modal relative z-10 w-full max-w-lg rounded-t-[28px] p-8 sm:rounded-[28px]">
         <div className="mb-6 flex items-start justify-between gap-4">
           <div>
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
+            <div className="inline-flex rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-700">
               {cred.categoryName || "Uncategorized"}
             </div>
-            <h2 className="mt-2 text-xl font-semibold tracking-tight text-vault-text">
+            <h2 className="font-display mt-2 text-2xl font-semibold tracking-tight text-slate-900">
               {cred.title || "Login"}
             </h2>
-            <p className="mt-1 text-sm text-vault-muted">{hostFromUrl(cred.url) || "—"}</p>
+            <p className="mt-1 text-xs text-slate-400 font-mono">{hostFromUrl(cred.url) || "No URL"}</p>
           </div>
           <button
             type="button"
-            title="Favorite"
+            title={cred.favorite ? "Starred" : "Star"}
             onClick={() => void onToggleFav()}
-            className={`rounded-full p-2 transition hover:bg-black/[0.04] ${
-              cred.favorite ? "text-g-yellow" : "text-vault-muted"
+            className={`rounded-xl p-2.5 transition-all duration-200 ease-vault ${
+              cred.favorite ? "text-amber-500 bg-amber-50" : "text-slate-400 hover:text-slate-600 hover:bg-slate-100"
             }`}
           >
-            <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
               <path d="M12 3.2c.35 0 .67.2.83.51l1.88 3.82 4.2.61c.92.13 1.29 1.27.62 1.92l-3.04 2.97.72 4.19c.16.92-.8 1.62-1.62 1.34L12 16.9l-3.76 1.98c-.82.27-1.78-.42-1.62-1.34l.72-4.19-3.04-2.97c-.67-.65-.3-1.79.62-1.92l4.2-.61 1.88-3.82c.16-.31.48-.51.83-.51z" />
             </svg>
           </button>
         </div>
 
         <dl className="space-y-4 text-sm">
-          <div>
-            <dt className="text-[11px] font-semibold uppercase tracking-wide text-vault-muted">URL</dt>
-            <dd className="mt-1 break-all text-vault-text">{cred.url || "—"}</dd>
+          <div className="rounded-2xl border border-slate-200/90 bg-slate-50/70 p-3.5">
+            <dt className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">Website URL</dt>
+            <dd className="mt-1 break-all text-xs font-mono text-slate-900">{cred.url || "—"}</dd>
           </div>
-          <div>
+          <div className="rounded-2xl border border-slate-200/90 bg-slate-50/70 p-3.5">
             <div className="flex items-center justify-between gap-2">
-              <dt className="text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
-                Username
+              <dt className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+                Username / Email
               </dt>
               <button
                 type="button"
                 disabled={!String(cred.username ?? "").trim()}
-                className="text-[12px] font-medium text-apple-blue hover:underline disabled:cursor-not-allowed disabled:opacity-40"
+                className="text-[11px] font-semibold text-slate-900 hover:text-black hover:underline disabled:cursor-not-allowed disabled:opacity-40"
                 onClick={() => onCopyUsername()}
               >
                 Copy
               </button>
             </div>
-            <dd className="mt-1 break-all font-medium">{cred.username || "—"}</dd>
+            <dd className="mt-1 break-all font-mono text-xs font-medium text-slate-900">{cred.username || "—"}</dd>
           </div>
-          <div>
+          <div className="rounded-2xl border border-slate-200/90 bg-slate-50/70 p-3.5">
             <dt className="flex items-center justify-between gap-2">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
                 Password
               </span>
               <span className="flex items-center gap-3">
                 <button
                   type="button"
                   disabled={!cred.password}
-                  className="text-[12px] font-medium text-apple-blue hover:underline disabled:cursor-not-allowed disabled:opacity-40"
+                  className="text-[11px] font-semibold text-slate-900 hover:text-black hover:underline disabled:cursor-not-allowed disabled:opacity-40"
                   onClick={() => onCopyPassword()}
                 >
                   Copy
@@ -3316,29 +3936,29 @@ function GlassDetailModal({
                 <button
                   type="button"
                   disabled={!cred.password}
-                  className="text-[12px] font-medium text-apple-blue hover:underline disabled:opacity-40"
+                  className="text-[11px] font-semibold text-slate-900 hover:text-black hover:underline disabled:opacity-40"
                   onClick={() => cred.password && setRevealedPw((x) => !x)}
                 >
                   {revealedPw ? "Hide" : "Reveal"}
                 </button>
               </span>
             </dt>
-            <dd className="mt-1 font-mono text-sm">
-              {revealedPw && cred.password ? cred.password : cred.password ? "••••••••••••" : "—"}
+            <dd className="mt-1 font-mono text-xs tracking-wider text-slate-900">
+              {revealedPw && cred.password ? cred.password : cred.password ? "••••••••••••••••" : "—"}
             </dd>
           </div>
           {cred.notes ? (
-            <div>
-              <dt className="text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
-                Notes
+            <div className="rounded-2xl border border-slate-200/90 bg-slate-50/70 p-3.5">
+              <dt className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+                Secure Notes
               </dt>
-              <dd className="mt-2 whitespace-pre-wrap rounded-xl bg-black/[0.03] px-3 py-2 text-[13px] leading-relaxed text-vault-text">
+              <dd className="mt-1.5 whitespace-pre-wrap text-[13px] leading-relaxed text-slate-800">
                 {cred.notes}
               </dd>
             </div>
           ) : null}
           {updated ? (
-            <p className="pt-2 text-[12px] text-vault-muted/90">Modified {updated}</p>
+            <p className="text-[11px] text-slate-400">Modified {updated}</p>
           ) : null}
         </dl>
 
@@ -3346,14 +3966,14 @@ function GlassDetailModal({
           <button
             type="button"
             onClick={onEdit}
-            className="inline-flex flex-1 items-center justify-center rounded-xl border border-black/[0.1] bg-white px-5 py-2.5 text-sm font-semibold sm:flex-none"
+            className="flex-1 rounded-xl bg-[#121212] hover:bg-black px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition active:scale-[0.98] sm:flex-none"
           >
-            Edit
+            Edit login
           </button>
           <button
             type="button"
             onClick={onDeleteRequest}
-            className="rounded-xl px-5 py-2.5 text-sm font-semibold text-apple-red hover:bg-red-500/10"
+            className="rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 px-5 py-2.5 text-sm font-semibold transition active:scale-[0.98]"
           >
             Delete
           </button>
@@ -3425,7 +4045,7 @@ function CredentialModal({
     <div className="fixed inset-0 z-50 flex min-h-0 items-end justify-center overflow-hidden sm:items-center sm:p-6">
       <button
         type="button"
-        className="absolute inset-0 bg-black/30 backdrop-blur-[2px]"
+        className="absolute inset-0 bg-black/60 backdrop-blur-md"
         aria-label="Close"
         onClick={onClose}
       />
@@ -3433,34 +4053,38 @@ function CredentialModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="cred-modal-title"
-        className="glass-modal relative z-10 flex max-h-[min(92dvh,44rem)] w-full max-w-lg min-w-0 flex-col overflow-hidden rounded-t-[28px] sm:mx-4 sm:my-auto sm:max-h-[min(92dvh,52rem)] sm:rounded-[28px]"
+        className="glass-modal animate-vault-modal relative z-10 flex max-h-[min(92dvh,46rem)] w-full max-w-lg min-w-0 flex-col overflow-hidden rounded-t-[28px] sm:mx-4 sm:my-auto sm:max-h-[min(92dvh,52rem)] sm:rounded-[28px]"
       >
-        <div className="border-b border-black/[0.06] px-8 pb-4 pt-8 sm:border-0 sm:pb-0">
-          <h2 id="cred-modal-title" className="text-lg font-semibold">
-            {isEdit ? "Edit password" : "New password"}
+        <div className="border-b border-slate-200/80 px-8 pb-4 pt-8">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+            {isEdit ? "Update archive" : "New encrypted record"}
+          </div>
+          <h2 id="cred-modal-title" className="font-display mt-1 text-2xl font-semibold tracking-tight text-slate-900">
+            {isEdit ? "Edit login" : "Save new login"}
           </h2>
-          <p className="mt-1 text-sm text-vault-muted">App identity, credentials, optional notes.</p>
+          <p className="mt-1 text-xs text-slate-500">Encrypted locally with AES-GCM before write.</p>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto overflow-x-hidden px-8 py-5 sm:pt-4">
-          <div className="flex min-w-0 flex-col gap-2">
-            <label className="text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
-              App name
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overflow-x-hidden px-8 py-5">
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <label className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+              App or Service Name
             </label>
             <input
-              className="w-full min-w-0 rounded-xl border border-black/[0.08] bg-white/95 px-4 py-3 text-sm outline-none ring-apple-blue/20 placeholder:text-vault-muted/70 focus:ring-2"
-              placeholder="e.g. Spotify, Banking"
+              className="vault-input"
+              placeholder="e.g. GitHub, ProtonMail, Figma"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
+              autoFocus={!isEdit}
             />
           </div>
 
-          <div className="flex min-w-0 flex-col gap-2">
-            <label className="text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <label className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
               Category
             </label>
             <select
-              className="w-full min-w-0 cursor-pointer rounded-xl border border-black/[0.08] bg-white/95 px-4 py-3 text-sm outline-none ring-apple-blue/20 focus:ring-2"
+              className="vault-input"
               value={String(categoryId)}
               onChange={(e) => setCategoryId(Number(e.target.value))}
             >
@@ -3472,87 +4096,87 @@ function CredentialModal({
             </select>
           </div>
 
-          <div className="flex min-w-0 flex-col gap-2">
-            <label className="text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <label className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
               Website URL
             </label>
             <input
-              className="w-full min-w-0 rounded-xl border border-black/[0.08] bg-white/95 px-4 py-3 text-sm outline-none ring-apple-blue/20 placeholder:text-vault-muted/70 focus:ring-2"
+              className="vault-input font-mono text-xs"
               placeholder="https://..."
               value={url}
               onChange={(e) => setUrl(e.target.value)}
             />
           </div>
 
-          <div className="flex min-w-0 flex-col gap-2">
-            <label className="text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
-              Username / email
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <label className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+              Username or Email
             </label>
             <input
-              className="w-full min-w-0 rounded-xl border border-black/[0.08] bg-white/95 px-4 py-3 text-sm outline-none ring-apple-blue/20 placeholder:text-vault-muted/70 focus:ring-2"
-              placeholder="you@company.com"
+              className="vault-input"
+              placeholder="you@domain.com"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
             />
           </div>
 
-          <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end sm:gap-3">
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
-              <label className="text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
+          <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-end sm:gap-2">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1.5">
+              <label className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
                 Password
               </label>
               <input
                 type="password"
-                className="w-full min-w-0 rounded-xl border border-black/[0.08] bg-white/95 px-4 py-3 font-mono text-sm outline-none ring-apple-blue/20 placeholder:text-vault-muted/70 focus:ring-2"
-                placeholder="••••••••"
+                className="vault-input font-mono text-xs"
+                placeholder="••••••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
               />
             </div>
             <button
               type="button"
-              title="Generate strong password"
-              className="h-11 shrink-0 self-stretch rounded-xl border border-g-green/40 bg-g-green/10 px-4 text-xs font-semibold text-[#1e6b32] transition hover:bg-g-green/15 sm:h-11 sm:self-auto sm:px-3"
+              title="Generate a cryptographically secure random password"
+              className="h-[42px] shrink-0 self-stretch px-4 text-xs font-semibold rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 transition active:scale-[0.98] sm:self-auto"
               onClick={() => setPassword(generatePassword(20))}
             >
-              Generate
+              ✦ Generate
             </button>
           </div>
 
-          <div className="flex min-w-0 flex-col gap-2">
-            <label className="text-[11px] font-semibold uppercase tracking-wide text-vault-muted">
-              Notes <span className="font-normal text-vault-muted/70">(PIN hints, backup codes)</span>
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <label className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+              Secure Notes <span className="font-normal text-slate-400">(2FA backup codes, PINs)</span>
             </label>
             <textarea
-              className="min-h-[5rem] max-h-[min(32vh,14rem)] w-full min-w-0 resize-y rounded-xl border border-black/[0.08] bg-white/95 px-4 py-3 text-sm outline-none ring-apple-blue/20 placeholder:text-vault-muted/70 focus:ring-2"
-              placeholder="Optional secure note"
+              className="vault-input min-h-[5rem] max-h-[12rem] resize-y"
+              placeholder="Optional notes, encrypted alongside credentials"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
             />
           </div>
 
-          <label className="flex shrink-0 cursor-pointer items-center gap-3 text-sm font-medium">
+          <label className="flex shrink-0 cursor-pointer items-center gap-3 pt-1 text-sm font-medium text-slate-800">
             <input
               type="checkbox"
               checked={favorite}
               onChange={(e) => setFavorite(e.target.checked)}
-              className="h-4 w-4 shrink-0 rounded border-black/20 accent-apple-blue"
+              className="h-4 w-4 shrink-0 rounded border-slate-300 accent-[#121212]"
             />
-            <span>Add to favorites</span>
+            <span>Star as quick favorite</span>
           </label>
         </div>
 
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-3 border-t border-black/[0.06] bg-white/[0.4] px-8 py-4 backdrop-blur-[2px] sm:bg-transparent sm:backdrop-blur-none">
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-3 border-t border-slate-200/80 px-8 py-4">
           <button
             type="button"
-            className="rounded-xl px-5 py-2.5 text-sm font-medium text-vault-muted hover:bg-black/[0.04]"
+            className="rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-5 py-2.5 text-sm font-medium text-slate-700 transition"
             onClick={onClose}
           >
             Cancel
           </button>
           <button
             type="button"
-            className="rounded-xl bg-apple-blue px-6 py-2.5 text-sm font-semibold text-white shadow-md shadow-apple-blue/20"
+            className="rounded-xl bg-[#121212] hover:bg-black px-7 py-2.5 text-sm font-semibold text-white shadow-sm transition active:scale-[0.98]"
             onClick={() =>
               onSave({
                 id: initial.id,
@@ -3566,7 +4190,7 @@ function CredentialModal({
               })
             }
           >
-            Save
+            {isEdit ? "Save changes" : "Store login"}
           </button>
         </div>
       </div>

@@ -29,6 +29,9 @@ contextBridge.exposeInMainWorld("vaultApi", {
     ipcRenderer.invoke("vault:reset-from-recovery", payload || {}),
   vaultIsUnlocked: () => ipcRenderer.invoke("vault:is-unlocked"),
   setMainAlwaysOnTop: (flag) => ipcRenderer.invoke("window:set-main-always-on-top", flag),
+  setCompactMode: (flag) => ipcRenderer.invoke("window:set-compact", flag),
+  setMiniCollapsed: (flag) => ipcRenderer.invoke("window:mini-collapse", flag),
+  autofillAfterDrop: (payload) => ipcRenderer.invoke("autofill:after-drop", payload),
   listCategories: () => ipcRenderer.invoke("vault:list-categories"),
   addCategory: (name) => ipcRenderer.invoke("vault:add-category", name),
   deleteCategory: (id) =>
